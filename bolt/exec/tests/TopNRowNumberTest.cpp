@@ -185,6 +185,31 @@ TEST_F(TopNRowNumberTest, largeOutput) {
   testLimit(2000);
 }
 
+TEST_F(TopNRowNumberTest, preservesOrderAcrossOutputBatches) {
+  const vector_size_t size = 50;
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(size, [](auto /*row*/) { return 1; }),
+      makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+  });
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .topNRowNumber({"c0"}, {"c1"}, size, true)
+                  .planNode();
+
+  auto sql = fmt::format(
+      "SELECT * FROM ("
+      "SELECT *, row_number() over (partition by c0 order by c1) AS row_number FROM tmp) "
+      "WHERE row_number <= {} ORDER BY c0, c1",
+      size);
+
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, "128")
+      .assertResults(sql, std::vector<uint32_t>{0, 1});
+}
+
 TEST_F(TopNRowNumberTest, manyPartitions) {
   const vector_size_t size = 10'000;
   auto data = split(

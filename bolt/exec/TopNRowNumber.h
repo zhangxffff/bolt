@@ -96,8 +96,33 @@ class TopNRowNumber : public Operator {
     std::priority_queue<char*, std::vector<char*, StlAllocator<char*>>, Compare>
         rows;
 
+    std::vector<char*, StlAllocator<char*>> reversedRows;
+    size_t nextOutputIndex{0};
+    bool materialized{false};
+
     TopRows(HashStringAllocator* allocator, RowComparator& comparator)
-        : rows{{comparator}, StlAllocator<char*>(allocator)} {}
+        : rows{{comparator}, StlAllocator<char*>(allocator)},
+          reversedRows{StlAllocator<char*>(allocator)} {}
+
+    bool isMaterialized() const {
+      return materialized;
+    }
+
+    size_t size() const {
+      return isMaterialized() ? reversedRows.size() : rows.size();
+    }
+
+    void materialize() {
+      if (isMaterialized()) {
+        return;
+      }
+      reversedRows.reserve(rows.size());
+      while (!rows.empty()) {
+        reversedRows.push_back(rows.top());
+        rows.pop();
+      }
+      materialized = true;
+    }
   };
 
   void initializeNewPartitions();

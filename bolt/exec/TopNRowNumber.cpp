@@ -380,16 +380,37 @@ void TopNRowNumber::appendPartitionRows(
     vector_size_t size,
     vector_size_t outputOffset,
     FlatVector<T>* rowNumbers) {
-  // Append 'size' partition rows in reverse order starting from 'start' row.
-  auto rowNumber = partition.rows.size() - start;
-  for (auto i = 0; i < size; ++i) {
-    const auto index = outputOffset + size - i - 1;
-    if (rowNumbers) {
-      rowNumbers->set(index, rowNumber--);
+  if (!partition.isMaterialized() && start == 0 &&
+      size == partition.rows.size()) {
+    // all rows in this batch, just pop from the priority queue
+    auto rowNumber = partition.size() - start;
+    for (auto i = 0; i < size; ++i) {
+      const auto index = outputOffset + size - i - 1;
+      if (rowNumbers) {
+        rowNumbers->set(index, rowNumber--);
+      }
+      outputRows_[index] = partition.rows.top();
+      partition.rows.pop();
     }
-    outputRows_[index] = partition.rows.top();
-    partition.rows.pop();
+    return;
   }
+
+  // Multiple batches: pop from reversedRows and advance nextOutputIndex.
+  partition.materialize();
+  auto rowNumber = partition.nextOutputIndex + 1;
+  for (auto i = 0; i < size; ++i) {
+    const auto index = outputOffset + i;
+    if (rowNumbers) {
+      rowNumbers->set(index, rowNumber++);
+    }
+    outputRows_[index] = partition.reversedRows.back();
+    partition.reversedRows.pop_back();
+  }
+  if (partition.reversedRows.empty()) {
+    // clear the vector
+    partition.reversedRows.shrink_to_fit();
+  }
+  partition.nextOutputIndex += size;
 }
 
 RowVectorPtr TopNRowNumber::getOutput() {
@@ -457,7 +478,7 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
   vector_size_t offset = 0;
   if (remainingRowsInPartition_ > 0) {
     auto& partition = currentPartition();
-    auto start = partition.rows.size() - remainingRowsInPartition_;
+    auto start = partition.size() - remainingRowsInPartition_;
     auto numRows =
         std::min<vector_size_t>(outputBatchSize_, remainingRowsInPartition_);
     appendPartitionRows(partition, start, numRows, offset, rowNumbers);
@@ -471,7 +492,7 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
       break;
     }
 
-    auto numRows = partition->rows.size();
+    auto numRows = partition->size();
     if (offset + numRows > outputBatchSize_) {
       remainingRowsInPartition_ = offset + numRows - outputBatchSize_;
 
