@@ -367,6 +367,18 @@ RowVectorPtr TableScan::getOutput() {
     }
     readBatchSize = std::min<int32_t>(
         maxReadBatchSize_, std::max<int32_t>(minReadBatchSize_, readBatchSize));
+    LOG(INFO) << operatorCtx_->operatorId() << " TableScan::getOutput:"
+              << " readBatchSize_=" << readBatchSize_
+              << ", maxReadBatchSize_=" << maxReadBatchSize_
+              << ", minReadBatchSize_=" << minReadBatchSize_
+              << ", maxFilteringRatio_=" << maxFilteringRatio_
+              << ", bytesPerRowAverage_=" << bytesPerRowAverage_
+              << ", bytesPerRowLastBatch_="
+              << (bytesPerRowLastBatch_.has_value()
+                      ? std::to_string(bytesPerRowLastBatch_.value())
+                      : "none")
+              << ", estimateBatchSizeFactor_=" << estimateBatchSizeFactor_
+              << ", finalReadBatchSize=" << readBatchSize;
     curStatus_ = "getOutput: dataSource_->next";
     auto dataOptional = dataSource_->next(readBatchSize, blockingFuture_);
     curStatus_ = "getOutput: checkPreload";
@@ -398,6 +410,11 @@ RowVectorPtr TableScan::getOutput() {
       auto data = dataOptional.value();
       if (data) {
         if (data->size() > 0) {
+          LOG(INFO) << operatorCtx_->operatorId() << " TableScan output:"
+                    << " rows=" << data->size()
+                    << ", estimateFlatSize=" << data->estimateFlatSize()
+                    << ", avgRowSize="
+                    << data->estimateFlatSize() / data->size();
           lockedStats->addInputVector(data->estimateFlatSize(), data->size());
           constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
           maxFilteringRatio_ = std::max(
