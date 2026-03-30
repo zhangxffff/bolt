@@ -32,6 +32,7 @@
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 
+#include "bolt/common/base/BoltException.h"
 #include "bolt/common/base/Exceptions.h"
 using namespace bytedance::bolt;
 
@@ -1027,5 +1028,79 @@ TEST(ExceptionTest, exceptionMacroInlining) {
     BOLT_USER_FAIL(errorStr, "definitely");
   } catch (const std::exception& e) {
     ASSERT_TRUE(folly::StringPiece{e.what()}.startsWith("argument not found"));
+  }
+}
+
+// Reproduces the bug where passing a null const char* (e.g. from e.what()) to
+// fmt::format or BOLT_FAIL causes fmt to throw "string pointer is null" instead
+// of the original exception message. This happens in production when e.what()
+// returns nullptr and the catch block tries to re-throw with a formatted message
+// containing e.what() as a format argument.
+TEST(ExceptionTest, fmtFormatWithNullConstCharPtr) {
+  const char* nullPtr = nullptr;
+
+  // fmt::format with a null const char* throws "string pointer is null".
+  // This is the root cause of the bug observed in TableScan.
+  try {
+    auto result = fmt::format("error: {}", nullPtr);
+    FAIL() << "Expected fmt::format to throw, but got: " << result;
+  } catch (const fmt::format_error& e) {
+    EXPECT_TRUE(
+        folly::StringPiece{e.what()}.startsWith("string pointer is null"))
+        << "Unexpected error: " << e.what();
+  }
+}
+
+TEST(ExceptionTest, boltFailWithNullConstCharPtr) {
+  const char* nullPtr = nullptr;
+
+  // BOLT_FAIL with a format string and a null const char* argument internally
+  // calls fmt::vformat, which throws fmt::format_error("string pointer is
+  // null") instead of the intended BoltRuntimeError. This reproduces the bug
+  // seen in SplitReader::checkAndCreatePaimonDeletionFileReader() and
+  // HiveConnectorUtil::applyPartitionFilter() where e.what() is passed as a
+  // format arg to BOLT_FAIL.
+  try {
+    BOLT_FAIL("error message: {}", nullPtr);
+    FAIL() << "Expected an exception to be thrown";
+  } catch (const BoltRuntimeError&) {
+    // This is the EXPECTED behavior if BOLT_FAIL handled null properly.
+    // Currently this branch is NOT taken because fmt throws first.
+  } catch (const fmt::format_error& e) {
+    // This is the ACTUAL (buggy) behavior: fmt throws before BOLT_FAIL
+    // can construct the BoltRuntimeError.
+    EXPECT_TRUE(
+        folly::StringPiece{e.what()}.startsWith("string pointer is null"))
+        << "Unexpected error: " << e.what();
+  }
+}
+
+TEST(ExceptionTest, boltFailWithNullConstCharPtrInExceptionContext) {
+  const char* nullPtr = nullptr;
+
+  // Simulates the full TableScan scenario: an ExceptionContextSetter is active,
+  // and a BOLT_FAIL with null const char* is thrown inside the context scope.
+  // The ExceptionContextSetter catches BoltException types to annotate them with
+  // debug context. But since fmt::format_error is NOT a BoltException, the
+  // context is lost and the user sees "string pointer is null" instead of a
+  // useful error message.
+  std::string debugString = "Split [Hive: test.parquet 0 - 100] Task test_task";
+  ExceptionContextSetter exceptionContext(
+      {[](BoltException::Type /*exceptionType*/, auto* debugString) {
+         return *static_cast<std::string*>(debugString);
+       },
+       &debugString});
+
+  try {
+    BOLT_FAIL("convert to integer error: {}, extra: {}", nullPtr, "info");
+    FAIL() << "Expected an exception to be thrown";
+  } catch (const BoltRuntimeError&) {
+    // Expected if BOLT_FAIL handled null properly - context would be attached.
+  } catch (const fmt::format_error& e) {
+    // Actual buggy behavior: fmt::format_error escapes, ExceptionContextSetter
+    // cannot annotate it because it only handles BoltException types.
+    EXPECT_TRUE(
+        folly::StringPiece{e.what()}.startsWith("string pointer is null"))
+        << "Unexpected error: " << e.what();
   }
 }
