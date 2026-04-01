@@ -43,6 +43,7 @@
 #include "bolt/exec/Task.h"
 #include "bolt/exec/TraceUtil.h"
 #include "bolt/expression/Expr.h"
+#include "bolt/vector/FlatVector.h"
 
 using bytedance::bolt::common::testutil::TestValue;
 namespace bytedance::bolt::exec {
@@ -410,6 +411,85 @@ RowVectorPtr TableScan::getOutput() {
           outputRows_ += data->size();
           this->setRuntimeMetric(
               kHasBeenProcessedRowCount, folly::to<std::string>(outputRows_));
+
+          // --- Diagnostic: detect string size mismatch ---
+          {
+            uint64_t totalActualStringBytes = 0;
+            uint64_t maxSingleStringLen = 0;
+            int numStringCols = 0;
+            auto rowType =
+                std::dynamic_pointer_cast<const RowType>(data->type());
+            for (int i = 0; i < data->childrenSize(); ++i) {
+              auto& child = data->childAt(i);
+              if (!child || !child->type()->isVarchar()) {
+                continue;
+              }
+              numStringCols++;
+              uint64_t colBytes = 0;
+              uint64_t colMaxLen = 0;
+              for (int32_t row = 0; row < data->size(); ++row) {
+                if (!child->isNullAt(row)) {
+                  auto sv = child->wrappedVector()
+                                ->asUnchecked<FlatVector<StringView>>()
+                                ->valueAtFast(child->wrappedIndex(row));
+                  auto len = static_cast<uint64_t>(sv.size());
+                  colBytes += len;
+                  if (len > colMaxLen) {
+                    colMaxLen = len;
+                  }
+                }
+              }
+              totalActualStringBytes += colBytes;
+              if (colMaxLen > maxSingleStringLen) {
+                maxSingleStringLen = colMaxLen;
+              }
+            }
+            auto flatSize = data->estimateFlatSize();
+            if (numStringCols > 0 && totalActualStringBytes > 2 * flatSize) {
+              LOG(WARNING) << "TableScan large string batch: rows="
+                           << data->size() << " estimateFlatSize=" << flatSize
+                           << " usedSize=" << data->usedSize()
+                           << " actualStringBytes=" << totalActualStringBytes
+                           << " ratio="
+                           << (flatSize > 0 ? totalActualStringBytes / flatSize
+                                            : 0)
+                           << "x"
+                           << " maxSingleStr=" << maxSingleStringLen
+                           << " numStringCols=" << numStringCols
+                           << " readBatchSize=" << readBatchSize;
+              for (int i = 0; i < data->childrenSize(); ++i) {
+                auto& child = data->childAt(i);
+                if (!child || !child->type()->isVarchar()) {
+                  continue;
+                }
+                uint64_t colBytes = 0, colMaxLen = 0;
+                uint32_t nonNullCount = 0;
+                for (int32_t row = 0; row < data->size(); ++row) {
+                  if (!child->isNullAt(row)) {
+                    auto sv = child->wrappedVector()
+                                  ->asUnchecked<FlatVector<StringView>>()
+                                  ->valueAtFast(child->wrappedIndex(row));
+                    colBytes += sv.size();
+                    auto len = static_cast<uint64_t>(sv.size());
+                    if (len > colMaxLen) {
+                      colMaxLen = len;
+                    }
+                    nonNullCount++;
+                  }
+                }
+                auto leaf = child->wrappedVector();
+                LOG(WARNING)
+                    << "  col[" << i << "] " << rowType->nameOf(i)
+                    << " encoding=" << child->encoding()
+                    << " leafSize=" << leaf->size()
+                    << " leafRetained=" << leaf->retainedSize()
+                    << " actualBytes=" << colBytes << " avgLen="
+                    << (nonNullCount > 0 ? colBytes / nonNullCount : 0)
+                    << " maxLen=" << colMaxLen << " nonNull=" << nonNullCount;
+              }
+            }
+          }
+          // --- End diagnostic ---
 
           return data;
         }

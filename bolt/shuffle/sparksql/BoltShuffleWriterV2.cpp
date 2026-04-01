@@ -70,6 +70,29 @@ arrow::Status BoltShuffleWriterV2::split(
     ensureLoaded(rv);
     auto flatSize = rv->estimateFlatSize();
     ensureFlatten(rv);
+    // --- Diagnostic: check post-flatten actual string bytes vs estimate ---
+    {
+      uint64_t totalActualStringBytes = 0;
+      for (uint32_t i = fixedWidthColumnCount_; i < simpleColumnIndices_.size();
+           ++i) {
+        auto colIdx = simpleColumnIndices_[i];
+        auto column =
+            rv->childAt(colIdx)->asFlatVector<bytedance::bolt::StringView>();
+        for (int32_t row = 0; row < column->size(); ++row) {
+          if (!column->isNullAt(row)) {
+            totalActualStringBytes += column->valueAt(row).size();
+          }
+        }
+      }
+      if (flatSize > 0 && totalActualStringBytes > 2 * flatSize) {
+        LOG(WARNING) << "ShuffleWriter string mismatch: rows=" << rv->size()
+                     << " preFlattenEstimate=" << flatSize
+                     << " actualStringBytes=" << totalActualStringBytes
+                     << " ratio=" << totalActualStringBytes / flatSize << "x"
+                     << " memLimit=" << memLimit;
+      }
+    }
+    // --- End diagnostic ---
     // try evict before split if current batch size is larger than memLimit
     if (flatSize > memLimit) {
       requestSpill_ = true;
