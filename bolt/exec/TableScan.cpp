@@ -625,6 +625,11 @@ void TableScan::addDynamicFilter(
 void TableScan::estimateBytesPerRow(
     const std::optional<RowVectorPtr>& dataOptional) {
   if (!enableEstimateBytesPerRow_ || !dataOptional || !dataOptional.value()) {
+    if (!enableEstimateBytesPerRow_ && dataOptional && dataOptional.value()) {
+      LOG(WARNING) << "estimateBytesPerRow SKIPPED: enableEstimateBytesPerRow_="
+                   << enableEstimateBytesPerRow_
+                   << " rows=" << dataOptional.value()->size();
+    }
     return;
   }
   auto size = dataOptional.value()->size();
@@ -638,12 +643,7 @@ void TableScan::estimateBytesPerRow(
   // Only check precomputed varchar columns; use valueAt for DWRF safety.
   constexpr int kSkewSampleSize = 8;
   constexpr int kSkewThreshold = 8;
-  const uint64_t preferredBytes = operatorCtx_->task()
-                                      ->queryCtx()
-                                      ->queryConfig()
-                                      .preferredOutputBatchBytes();
-  const int64_t maxSafeEntrySize =
-      static_cast<int64_t>(preferredBytes / std::max<int32_t>(size, 1));
+  constexpr int32_t kMinMaxValueSizeForSkewCheck = 1024;
 
   auto data = dataOptional.value();
   for (auto colIdx : varcharColumnIndices_) {
@@ -659,9 +659,10 @@ void TableScan::estimateBytesPerRow(
       continue;
     }
 
-    // Fast path: skip if maxValueSize unknown or small.
     auto maxValSize = dictVec->maxValueSize();
-    if (!maxValSize.has_value() || maxValSize.value() < maxSafeEntrySize) {
+    // Fast path: skip if maxValueSize unknown or small.
+    if (!maxValSize.has_value() ||
+        maxValSize.value() < kMinMaxValueSizeForSkewCheck) {
       continue;
     }
 
@@ -684,17 +685,34 @@ void TableScan::estimateBytesPerRow(
     }
     uint64_t sampleAvg = sampleTotal / sampleCount;
 
+    LOG(WARNING) << "estimateBytesPerRow skew check: col=" << colIdx
+                 << " rows=" << size << " maxValSize=" << maxValSize.value()
+                 << " dictAvg=" << dictAvg << " sampleAvg=" << sampleAvg
+                 << " threshold=" << kSkewThreshold * dictAvg
+                 << " skewed=" << (sampleAvg > kSkewThreshold * dictAvg);
+
     if (sampleAvg > kSkewThreshold * dictAvg) {
       auto columnUsedSize = child->usedSize();
       auto estimatedActualBytes =
           static_cast<uint64_t>(sampleAvg) * static_cast<uint64_t>(size);
       if (estimatedActualBytes > columnUsedSize) {
         batchByets += (estimatedActualBytes - columnUsedSize);
+        LOG(WARNING) << "estimateBytesPerRow skew correction: col=" << colIdx
+                     << " columnUsedSize=" << columnUsedSize
+                     << " estimatedActualBytes=" << estimatedActualBytes
+                     << " correctedBatchBytes=" << batchByets;
       }
     }
   }
 
   auto bytesPerRow = batchByets / size;
+  LOG(WARNING) << "estimateBytesPerRow: rows=" << size
+               << " usedSize=" << dataOptional.value()->usedSize()
+               << " correctedBytes=" << batchByets
+               << " bytesPerRow=" << bytesPerRow
+               << " readBatchSize_=" << readBatchSize_
+               << " factor=" << estimateBatchSizeFactor_
+               << " enableEstimate=" << enableEstimateBytesPerRow_;
 
   auto adjustBatchSizeFactor = [this]() {
     estimateBatchSizeFactor_ =
