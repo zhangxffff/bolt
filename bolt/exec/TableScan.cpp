@@ -424,18 +424,25 @@ RowVectorPtr TableScan::getOutput() {
               if (!child || !child->type()->isVarchar()) {
                 continue;
               }
+              // Only handle vectors whose leaf is a FlatVector
+              auto leaf = child->wrappedVector();
+              if (leaf->encoding() != VectorEncoding::Simple::FLAT) {
+                continue;
+              }
+              auto* flatLeaf = leaf->asUnchecked<FlatVector<StringView>>();
               numStringCols++;
               uint64_t colBytes = 0;
               uint64_t colMaxLen = 0;
               for (int32_t row = 0; row < data->size(); ++row) {
                 if (!child->isNullAt(row)) {
-                  auto sv = child->wrappedVector()
-                                ->asUnchecked<FlatVector<StringView>>()
-                                ->valueAtFast(child->wrappedIndex(row));
-                  auto len = static_cast<uint64_t>(sv.size());
-                  colBytes += len;
-                  if (len > colMaxLen) {
-                    colMaxLen = len;
+                  auto idx = child->wrappedIndex(row);
+                  if (idx < flatLeaf->size()) {
+                    auto len = static_cast<uint64_t>(
+                        flatLeaf->valueAtFast(idx).size());
+                    colBytes += len;
+                    if (len > colMaxLen) {
+                      colMaxLen = len;
+                    }
                   }
                 }
               }
@@ -462,22 +469,31 @@ RowVectorPtr TableScan::getOutput() {
                 if (!child || !child->type()->isVarchar()) {
                   continue;
                 }
+                auto leaf = child->wrappedVector();
+                if (leaf->encoding() != VectorEncoding::Simple::FLAT) {
+                  LOG(WARNING)
+                      << "  col[" << i << "] " << rowType->nameOf(i)
+                      << " encoding=" << child->encoding()
+                      << " leafEncoding=" << leaf->encoding() << " (skipped)";
+                  continue;
+                }
+                auto* flatLeaf = leaf->asUnchecked<FlatVector<StringView>>();
                 uint64_t colBytes = 0, colMaxLen = 0;
                 uint32_t nonNullCount = 0;
                 for (int32_t row = 0; row < data->size(); ++row) {
                   if (!child->isNullAt(row)) {
-                    auto sv = child->wrappedVector()
-                                  ->asUnchecked<FlatVector<StringView>>()
-                                  ->valueAtFast(child->wrappedIndex(row));
-                    colBytes += sv.size();
-                    auto len = static_cast<uint64_t>(sv.size());
-                    if (len > colMaxLen) {
-                      colMaxLen = len;
+                    auto idx = child->wrappedIndex(row);
+                    if (idx < flatLeaf->size()) {
+                      auto len = static_cast<uint64_t>(
+                          flatLeaf->valueAtFast(idx).size());
+                      colBytes += len;
+                      if (len > colMaxLen) {
+                        colMaxLen = len;
+                      }
+                      nonNullCount++;
                     }
-                    nonNullCount++;
                   }
                 }
-                auto leaf = child->wrappedVector();
                 LOG(WARNING)
                     << "  col[" << i << "] " << rowType->nameOf(i)
                     << " encoding=" << child->encoding()
