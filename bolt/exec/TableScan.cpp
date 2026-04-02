@@ -711,10 +711,12 @@ void TableScan::estimateBytesPerRow(
     uint64_t dictAvg =
         dictValues->usedSize() / std::max<uint64_t>(dictValues->size(), 1);
 
-    // Sample 8 rows via valueAt (safe for DWRF).
+    // Uniform sampling via valueAt (safe for DWRF).
     uint64_t sampleTotal = 0;
     int sampleCount = 0;
-    for (int32_t row = 0; row < size && sampleCount < kSkewSampleSize; ++row) {
+    auto step = std::max<int32_t>(size / kSkewSampleSize, 1);
+    for (int32_t row = 0; row < size && sampleCount < kSkewSampleSize;
+         row += step) {
       if (!dictVec->isNullAt(row)) {
         sampleTotal += dictVec->valueAt(row).size();
         sampleCount++;
