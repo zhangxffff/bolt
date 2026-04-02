@@ -60,11 +60,15 @@ struct DictionaryValues {
   // True if values are in ascending order.
   bool sorted{false};
 
+  // For a string dictionary, the maximum string length among all entries.
+  int32_t maxStringLength{0};
+
   void clear() {
     values = nullptr;
     strings = nullptr;
     numValues = 0;
     sorted = false;
+    maxStringLength = 0;
   }
 };
 

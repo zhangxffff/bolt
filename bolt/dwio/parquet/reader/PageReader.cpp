@@ -623,11 +623,14 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
             numBytes, inputStream_.get(), strings, bufferStart_, bufferEnd_);
       }
       auto header = strings;
+      int32_t maxLen = 0;
       for (auto i = 0; i < dictionary_.numValues; ++i) {
         auto length = *reinterpret_cast<const int32_t*>(header);
         values[i] = StringView(header + sizeof(int32_t), length);
         header += length + sizeof(int32_t);
+        maxLen = std::max(maxLen, length);
       }
+      dictionary_.maxStringLength = maxLen;
       BOLT_CHECK_EQ(header, strings + numBytes);
       break;
     }

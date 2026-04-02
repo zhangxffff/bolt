@@ -32,6 +32,7 @@
 
 #include <folly/container/F14Map.h>
 #include <memory>
+#include <optional>
 #include <type_traits>
 
 #include "bolt/common/base/SimdUtil.h"
@@ -224,9 +225,18 @@ class DictionaryVector : public SimpleVector<T> {
     return out.str();
   }
 
+  std::optional<int32_t> maxValueSize() const {
+    return maxValueSize_;
+  }
+
+  void setMaxValueSize(int32_t size) {
+    maxValueSize_ = size;
+  }
+
   void setDictionaryValues(VectorPtr dictionaryValues) {
     dictionaryValues_ = dictionaryValues;
     initialized_ = false;
+    maxValueSize_.reset();
     setInternalState();
   }
 
@@ -274,6 +284,10 @@ class DictionaryVector : public SimpleVector<T> {
   // Indicates whether internal state has been set. Can also be false if there
   // is an unloaded lazy vector under the encoding layers.
   bool initialized_{false};
+
+  // For string dictionaries, the max entry size. Used by TableScan to detect
+  // dictionary skew. nullopt = unknown (not set by reader).
+  std::optional<int32_t> maxValueSize_;
 };
 
 template <typename T>

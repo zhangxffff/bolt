@@ -173,6 +173,9 @@ class TableScan : public SourceOperator {
 
   std::string currentSplitStr_;
 
+  // Precomputed indices of VARCHAR columns for dictionary skew detection.
+  std::vector<int32_t> varcharColumnIndices_;
+
   uint64_t outputRows_{0};
 
   std::shared_ptr<connector::AsyncThreadCtx> asyncThreadCtx_;

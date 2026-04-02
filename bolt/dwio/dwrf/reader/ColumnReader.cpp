@@ -1416,6 +1416,7 @@ void StringDictionaryColumnReader::readDictionaryVector(
   VectorPtr dictionaryValues;
   const auto* dictionaryBlobPtr = dictionaryBlob_->as<char>();
   const auto* dictionaryOffsetsPtr = dictionaryOffset_->as<int64_t>();
+  int32_t maxLen = 0;
   if (hasStrideDict) {
     if (!combinedDictionaryValues_) {
       // TODO Reuse memory
@@ -1423,17 +1424,19 @@ void StringDictionaryColumnReader::readDictionaryVector(
           dictionaryCount_ + strideDictCount_, &memoryPool_);
       auto* valuesPtr = values->asMutable<StringView>();
       for (size_t i = 0; i < dictionaryCount_; i++) {
-        valuesPtr[i] = StringView(
-            dictionaryBlobPtr + dictionaryOffsetsPtr[i],
-            dictionaryOffsetsPtr[i + 1] - dictionaryOffsetsPtr[i]);
+        auto len = dictionaryOffsetsPtr[i + 1] - dictionaryOffsetsPtr[i];
+        valuesPtr[i] =
+            StringView(dictionaryBlobPtr + dictionaryOffsetsPtr[i], len);
+        maxLen = std::max(maxLen, static_cast<int32_t>(len));
       }
 
       const auto* strideDictPtr = strideDict_->as<char>();
       const auto* strideDictOffsetPtr = strideDictOffset_->as<int64_t>();
       for (size_t i = 0; i < strideDictCount_; i++) {
-        valuesPtr[dictionaryCount_ + i] = StringView(
-            strideDictPtr + strideDictOffsetPtr[i],
-            strideDictOffsetPtr[i + 1] - strideDictOffsetPtr[i]);
+        auto len = strideDictOffsetPtr[i + 1] - strideDictOffsetPtr[i];
+        valuesPtr[dictionaryCount_ + i] =
+            StringView(strideDictPtr + strideDictOffsetPtr[i], len);
+        maxLen = std::max(maxLen, static_cast<int32_t>(len));
       }
 
       combinedDictionaryValues_ = std::make_shared<FlatVector<StringView>>(
@@ -1453,9 +1456,10 @@ void StringDictionaryColumnReader::readDictionaryVector(
           AlignedBuffer::allocate<StringView>(dictionaryCount_, &memoryPool_);
       auto* valuesPtr = values->asMutable<StringView>();
       for (size_t i = 0; i < dictionaryCount_; i++) {
-        valuesPtr[i] = StringView(
-            dictionaryBlobPtr + dictionaryOffsetsPtr[i],
-            dictionaryOffsetsPtr[i + 1] - dictionaryOffsetsPtr[i]);
+        auto len = dictionaryOffsetsPtr[i + 1] - dictionaryOffsetsPtr[i];
+        valuesPtr[i] =
+            StringView(dictionaryBlobPtr + dictionaryOffsetsPtr[i], len);
+        maxLen = std::max(maxLen, static_cast<int32_t>(len));
       }
 
       dictionaryValues_ = std::make_shared<FlatVector<StringView>>(
@@ -1473,10 +1477,13 @@ void StringDictionaryColumnReader::readDictionaryVector(
     result->setNullCount(nullCount);
     result->as<DictionaryVector<StringView>>()->setDictionaryValues(
         dictionaryValues);
+    result->as<DictionaryVector<StringView>>()->setMaxValueSize(maxLen);
   } else {
-    result = std::make_shared<DictionaryVector<StringView>>(
+    auto dictVec = std::make_shared<DictionaryVector<StringView>>(
         &memoryPool_, nulls, numValues, dictionaryValues, indices);
-    result->setNullCount(nullCount);
+    dictVec->setMaxValueSize(maxLen);
+    dictVec->setNullCount(nullCount);
+    result = std::move(dictVec);
   }
 }
 

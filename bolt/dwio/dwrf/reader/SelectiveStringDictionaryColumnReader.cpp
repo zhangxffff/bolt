@@ -121,9 +121,12 @@ void SelectiveStringDictionaryColumnReader::loadDictionary(
   auto* lengths = values.values->asMutable<int32_t>();
   lengthDecoder.nextLengths(lengths, values.numValues);
   int64_t stringsBytes = 0;
+  int32_t maxLen = 0;
   for (auto i = 0; i < values.numValues; ++i) {
     stringsBytes += lengths[i];
+    maxLen = std::max(maxLen, lengths[i]);
   }
+  values.maxStringLength = maxLen;
   // read bytes from underlying string
   values.strings = AlignedBuffer::allocate<char>(stringsBytes, &memoryPool_);
   data.readFully(values.strings->asMutable<char>(), stringsBytes);
@@ -333,8 +336,14 @@ void SelectiveStringDictionaryColumnReader::getValues(
   if (!dictionaryValues_) {
     makeDictionaryBaseVector();
   }
-  *result = std::make_shared<DictionaryVector<StringView>>(
+  auto dictVec = std::make_shared<DictionaryVector<StringView>>(
       &memoryPool_, resultNulls(), numValues_, dictionaryValues_, values_);
+  int32_t maxStr = scanState_.dictionary.maxStringLength;
+  if (scanState_.dictionary2.numValues > 0) {
+    maxStr = std::max(maxStr, scanState_.dictionary2.maxStringLength);
+  }
+  dictVec->setMaxValueSize(maxStr);
+  *result = std::move(dictVec);
 }
 
 void SelectiveStringDictionaryColumnReader::ensureInitialized() {

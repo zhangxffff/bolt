@@ -164,8 +164,10 @@ void StringColumnReader::getValues(const RowSet& rows, VectorPtr* result) {
         formatData_->as<ParquetData>().dictionaryValues(fileType_->type());
     compactScalarValues<int32_t, int32_t>(rows, false);
 
-    *result = std::make_shared<DictionaryVector<StringView>>(
+    auto dictVec = std::make_shared<DictionaryVector<StringView>>(
         &memoryPool_, resultNulls(), numValues_, dictionaryValues, values_);
+    dictVec->setMaxValueSize(scanState_.dictionary.maxStringLength);
+    *result = std::move(dictVec);
 
     if (castExprSet_ && castExprSet_->size() != 0) {
       doCastEvaluate(result);

@@ -30,7 +30,6 @@
 
 #include <folly/ScopeGuard.h>
 #include <glog/logging.h>
-#include <algorithm>
 #include <cstdint>
 #include <memory>
 
@@ -44,6 +43,7 @@
 #include "bolt/exec/Task.h"
 #include "bolt/exec/TraceUtil.h"
 #include "bolt/expression/Expr.h"
+#include "bolt/vector/DictionaryVector.h"
 #include "bolt/vector/FlatVector.h"
 
 using bytedance::bolt::common::testutil::TestValue;
@@ -93,6 +93,14 @@ TableScan::TableScan(
   if (isFixedWidthOutputType_) {
     enableEstimateBytesPerRow_ = false;
   }
+  // Precompute varchar column indices for dictionary skew detection.
+  auto rowType = asRowType(outputType_);
+  for (int32_t i = 0; i < rowType->size(); ++i) {
+    if (rowType->childAt(i)->isVarchar()) {
+      varcharColumnIndices_.push_back(i);
+    }
+  }
+
   connector_ = connector::getConnector(tableHandle_->connectorId());
   this->setRuntimeMetric(kCanUsedToEstimateHashBuildPartitionNum, "true");
   this->setRuntimeMetric(
@@ -416,7 +424,6 @@ RowVectorPtr TableScan::getOutput() {
           // --- Diagnostic: detect string size mismatch ---
           {
             uint64_t totalActualStringBytes = 0;
-            uint64_t maxSingleStringLen = 0;
             int numStringCols = 0;
             auto rowType =
                 std::dynamic_pointer_cast<const RowType>(data->type());
@@ -425,32 +432,18 @@ RowVectorPtr TableScan::getOutput() {
               if (!child || !child->type()->isVarchar()) {
                 continue;
               }
-              // Only handle vectors whose leaf is a FlatVector
-              auto leaf = child->wrappedVector();
-              if (leaf->encoding() != VectorEncoding::Simple::FLAT) {
+              auto* sv = child->as<SimpleVector<StringView>>();
+              if (!sv) {
                 continue;
               }
-              auto* flatLeaf = leaf->asUnchecked<FlatVector<StringView>>();
               numStringCols++;
               uint64_t colBytes = 0;
-              uint64_t colMaxLen = 0;
               for (int32_t row = 0; row < data->size(); ++row) {
                 if (!child->isNullAt(row)) {
-                  auto idx = child->wrappedIndex(row);
-                  if (idx < flatLeaf->size()) {
-                    auto len = static_cast<uint64_t>(
-                        flatLeaf->valueAtFast(idx).size());
-                    colBytes += len;
-                    if (len > colMaxLen) {
-                      colMaxLen = len;
-                    }
-                  }
+                  colBytes += sv->valueAt(row).size();
                 }
               }
               totalActualStringBytes += colBytes;
-              if (colMaxLen > maxSingleStringLen) {
-                maxSingleStringLen = colMaxLen;
-              }
             }
             auto flatSize = data->estimateFlatSize();
             if (numStringCols > 0 && totalActualStringBytes > 2 * flatSize) {
@@ -462,7 +455,6 @@ RowVectorPtr TableScan::getOutput() {
                            << (flatSize > 0 ? totalActualStringBytes / flatSize
                                             : 0)
                            << "x"
-                           << " maxSingleStr=" << maxSingleStringLen
                            << " numStringCols=" << numStringCols
                            << " readBatchSize=" << readBatchSize;
               for (int i = 0; i < data->childrenSize(); ++i) {
@@ -470,83 +462,26 @@ RowVectorPtr TableScan::getOutput() {
                 if (!child || !child->type()->isVarchar()) {
                   continue;
                 }
-                auto leaf = child->wrappedVector();
-                if (leaf->encoding() != VectorEncoding::Simple::FLAT) {
-                  LOG(WARNING)
-                      << "  col[" << i << "] " << rowType->nameOf(i)
-                      << " encoding=" << child->encoding()
-                      << " leafEncoding=" << leaf->encoding() << " (skipped)";
+                auto* sv = child->as<SimpleVector<StringView>>();
+                if (!sv) {
                   continue;
                 }
-                auto* flatLeaf = leaf->asUnchecked<FlatVector<StringView>>();
-                // Collect per-row string lengths
-                std::vector<uint64_t> rowLens;
-                rowLens.reserve(data->size());
+                uint64_t colBytes = 0, colMaxLen = 0;
+                uint32_t nonNullCount = 0;
                 for (int32_t row = 0; row < data->size(); ++row) {
                   if (!child->isNullAt(row)) {
-                    auto idx = child->wrappedIndex(row);
-                    if (idx < flatLeaf->size()) {
-                      rowLens.push_back(flatLeaf->valueAtFast(idx).size());
-                    }
-                  }
-                }
-                uint64_t colBytes = 0, colMinLen = UINT64_MAX, colMaxLen = 0;
-                for (auto len : rowLens) {
-                  colBytes += len;
-                  colMinLen = std::min(colMinLen, len);
-                  colMaxLen = std::max(colMaxLen, len);
-                }
-                uint64_t colMedian = 0;
-                if (!rowLens.empty()) {
-                  auto mid = rowLens.size() / 2;
-                  std::nth_element(
-                      rowLens.begin(), rowLens.begin() + mid, rowLens.end());
-                  colMedian = rowLens[mid];
-                } else {
-                  colMinLen = 0;
-                }
-                // Collect dictionary entry lengths
-                uint64_t dictMin = UINT64_MAX, dictMax = 0, dictTotal = 0;
-                uint64_t dictMedian = 0;
-                int32_t dictNonNull = 0;
-                {
-                  std::vector<uint64_t> dictLens;
-                  dictLens.reserve(flatLeaf->size());
-                  for (int32_t di = 0; di < flatLeaf->size(); ++di) {
-                    if (!flatLeaf->isNullAt(di)) {
-                      auto len = static_cast<uint64_t>(
-                          flatLeaf->valueAtFast(di).size());
-                      dictLens.push_back(len);
-                      dictTotal += len;
-                      dictMin = std::min(dictMin, len);
-                      dictMax = std::max(dictMax, len);
-                    }
-                  }
-                  dictNonNull = dictLens.size();
-                  if (!dictLens.empty()) {
-                    auto mid = dictLens.size() / 2;
-                    std::nth_element(
-                        dictLens.begin(),
-                        dictLens.begin() + mid,
-                        dictLens.end());
-                    dictMedian = dictLens[mid];
-                  } else {
-                    dictMin = 0;
+                    auto len = static_cast<uint64_t>(sv->valueAt(row).size());
+                    colBytes += len;
+                    colMaxLen = std::max(colMaxLen, len);
+                    nonNullCount++;
                   }
                 }
                 LOG(WARNING)
                     << "  col[" << i << "] " << rowType->nameOf(i)
                     << " encoding=" << child->encoding()
-                    << " leafSize=" << leaf->size()
-                    << " leafRetained=" << leaf->retainedSize()
-                    << " actualBytes=" << colBytes << " row{min=" << colMinLen
-                    << " max=" << colMaxLen << " med=" << colMedian << " avg="
-                    << (rowLens.size() > 0 ? colBytes / rowLens.size() : 0)
-                    << " cnt=" << rowLens.size() << "}"
-                    << " dict{min=" << dictMin << " max=" << dictMax
-                    << " med=" << dictMedian << " avg="
-                    << (dictNonNull > 0 ? dictTotal / dictNonNull : 0)
-                    << " cnt=" << dictNonNull << "}";
+                    << " actualBytes=" << colBytes << " avgLen="
+                    << (nonNullCount > 0 ? colBytes / nonNullCount : 0)
+                    << " maxLen=" << colMaxLen << " nonNull=" << nonNullCount;
               }
             }
           }
@@ -698,6 +633,67 @@ void TableScan::estimateBytesPerRow(
   }
 
   auto batchByets = dataOptional.value()->usedSize();
+
+  // Correct for dictionary-encoded string columns with skewed reference.
+  // Only check precomputed varchar columns; use valueAt for DWRF safety.
+  constexpr int kSkewSampleSize = 8;
+  constexpr int kSkewThreshold = 8;
+  const uint64_t preferredBytes = operatorCtx_->task()
+                                      ->queryCtx()
+                                      ->queryConfig()
+                                      .preferredOutputBatchBytes();
+  const int64_t maxSafeEntrySize =
+      static_cast<int64_t>(preferredBytes / std::max<int32_t>(size, 1));
+
+  auto data = dataOptional.value();
+  for (auto colIdx : varcharColumnIndices_) {
+    if (colIdx >= data->childrenSize()) {
+      continue;
+    }
+    auto& child = data->childAt(colIdx);
+    if (!child || child->encoding() != VectorEncoding::Simple::DICTIONARY) {
+      continue;
+    }
+    auto* dictVec = child->as<DictionaryVector<StringView>>();
+    if (!dictVec) {
+      continue;
+    }
+
+    // Fast path: skip if maxValueSize unknown or small.
+    auto maxValSize = dictVec->maxValueSize();
+    if (!maxValSize.has_value() || maxValSize.value() < maxSafeEntrySize) {
+      continue;
+    }
+
+    // dictAvg via valueVector() (safe, no lazy load).
+    auto dictValues = dictVec->valueVector();
+    uint64_t dictAvg =
+        dictValues->usedSize() / std::max<uint64_t>(dictValues->size(), 1);
+
+    // Sample 8 rows via valueAt (safe for DWRF).
+    uint64_t sampleTotal = 0;
+    int sampleCount = 0;
+    for (int32_t row = 0; row < size && sampleCount < kSkewSampleSize; ++row) {
+      if (!dictVec->isNullAt(row)) {
+        sampleTotal += dictVec->valueAt(row).size();
+        sampleCount++;
+      }
+    }
+    if (sampleCount == 0) {
+      continue;
+    }
+    uint64_t sampleAvg = sampleTotal / sampleCount;
+
+    if (sampleAvg > kSkewThreshold * dictAvg) {
+      auto columnUsedSize = child->usedSize();
+      auto estimatedActualBytes =
+          static_cast<uint64_t>(sampleAvg) * static_cast<uint64_t>(size);
+      if (estimatedActualBytes > columnUsedSize) {
+        batchByets += (estimatedActualBytes - columnUsedSize);
+      }
+    }
+  }
+
   auto bytesPerRow = batchByets / size;
 
   auto adjustBatchSizeFactor = [this]() {

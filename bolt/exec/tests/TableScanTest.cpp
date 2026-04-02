@@ -41,6 +41,7 @@
 #include "bolt/core/QueryConfig.h"
 #include "bolt/dwio/common/tests/utils/DataFiles.h"
 #include "bolt/dwio/paimon/deletionvectors/DeletionFileReader.h"
+#include "bolt/dwio/parquet/writer/Writer.h"
 #include "bolt/exec/OutputBufferManager.h"
 #include "bolt/exec/PlanNodeStats.h"
 #include "bolt/exec/tests/utils/AssertQueryBuilder.h"
@@ -4825,4 +4826,162 @@ TEST_F(TableScanTest, rowNumberInRemainingFilter) {
   AssertQueryBuilder(plan)
       .split(makeHiveConnectorSplit(file->getPath()))
       .assertResults(expected);
+}
+
+// Helper: compute actualStringBytes for a batch using SimpleVector::valueAt
+// (safe for both DictionaryVector and FlatVector, avoids wrappedVector hang on
+// DWRF).
+namespace {
+uint64_t computeActualStringBytes(const VectorPtr& child) {
+  uint64_t bytes = 0;
+  auto* sv = child->as<SimpleVector<StringView>>();
+  if (!sv) {
+    return 0;
+  }
+  for (int32_t row = 0; row < child->size(); ++row) {
+    if (!child->isNullAt(row)) {
+      bytes += sv->valueAt(row).size();
+    }
+  }
+  return bytes;
+}
+} // namespace
+
+TEST_F(TableScanTest, parquetSkewedDictionary) {
+  constexpr int32_t kNumRows = 10000;
+  constexpr int32_t kLongStringLen = 100 * 1024;
+  constexpr int32_t kNumShortEntries = 100;
+
+  std::string longStr(kLongStringLen, 'x');
+  std::vector<std::string> shortStrs;
+  shortStrs.reserve(kNumShortEntries);
+  for (int i = 0; i < kNumShortEntries; ++i) {
+    shortStrs.push_back("s" + std::to_string(i));
+  }
+  auto strVector = makeFlatVector<StringView>(kNumRows, [&](auto row) {
+    if (row < kNumShortEntries) {
+      return StringView(shortStrs[row]);
+    }
+    return StringView(longStr);
+  });
+  auto data = makeRowVector({"skewed_col"}, {strVector});
+
+  // Write Parquet file with dictionary encoding.
+  auto filePath = TempFilePath::create();
+  {
+    bytedance::bolt::parquet::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.enableDictionary = true;
+    options.compression = common::CompressionKind_NONE;
+    options.dictionaryPageSizeLimit = 512 * 1024;
+    auto localWriteFile =
+        std::make_unique<LocalWriteFile>(filePath->path, true, false);
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(localWriteFile), filePath->path);
+    auto writer = std::make_unique<bytedance::bolt::parquet::Writer>(
+        std::move(sink), options, asRowType(data->type()));
+    writer->write(data);
+    writer->close();
+  }
+
+  auto rowType = ROW({"skewed_col"}, {VARCHAR()});
+  auto plan = PlanBuilder().tableScan(rowType).planNode();
+  auto split = HiveConnectorSplitBuilder(filePath->path)
+                   .fileFormat(dwio::common::FileFormat::PARQUET)
+                   .build();
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryConfigs[QueryConfig::kEnableEstimateRowSizeBasedOnSample] =
+      "true";
+  auto cursor = TaskCursor::create(params);
+  cursor->task()->addSplit("0", exec::Split(split));
+  cursor->task()->noMoreSplits("0");
+
+  int totalRows = 0;
+  int batchIdx = 0;
+  constexpr uint64_t kMaxAcceptableStringBytes = 20UL << 20; // 20MB
+  while (cursor->moveNext()) {
+    auto batch = cursor->current()->as<RowVector>();
+    auto& child = batch->childAt(0);
+    auto actualStringBytes = computeActualStringBytes(child);
+
+    // Verify long string rows.
+    auto* sv = child->as<SimpleVector<StringView>>();
+    for (int32_t row = 0; row < child->size(); ++row) {
+      if (!child->isNullAt(row) && totalRows + row >= kNumShortEntries) {
+        EXPECT_EQ(sv->valueAt(row).size(), kLongStringLen)
+            << "row " << (totalRows + row);
+      }
+    }
+
+    LOG(INFO) << "Parquet batch[" << batchIdx << "]: rows=" << batch->size()
+              << " actualStringBytes=" << actualStringBytes;
+    EXPECT_LE(actualStringBytes, kMaxAcceptableStringBytes)
+        << "Parquet batch " << batchIdx << " too large";
+    totalRows += batch->size();
+    batchIdx++;
+  }
+  EXPECT_EQ(totalRows, kNumRows);
+}
+
+TEST_F(TableScanTest, dwrfSkewedDictionary) {
+  constexpr int32_t kNumRows = 10000;
+  constexpr int32_t kLongStringLen = 100 * 1024;
+  constexpr int32_t kNumShortEntries = 100;
+
+  std::string longStr(kLongStringLen, 'x');
+  std::vector<std::string> shortStrs;
+  shortStrs.reserve(kNumShortEntries);
+  for (int i = 0; i < kNumShortEntries; ++i) {
+    shortStrs.push_back("s" + std::to_string(i));
+  }
+  auto strVector = makeFlatVector<StringView>(kNumRows, [&](auto row) {
+    if (row < kNumShortEntries) {
+      return StringView(shortStrs[row]);
+    }
+    return StringView(longStr);
+  });
+  auto data = makeRowVector({"skewed_col"}, {strVector});
+
+  // Write DWRF file with no compression.
+  auto filePath = TempFilePath::create();
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::COMPRESSION, common::CompressionKind_NONE);
+  writeToFile(filePath->path, {data}, config);
+
+  auto rowType = ROW({"skewed_col"}, {VARCHAR()});
+  auto plan = PlanBuilder().tableScan(rowType).planNode();
+  CursorParameters params;
+  params.planNode = plan;
+  params.queryConfigs[QueryConfig::kEnableEstimateRowSizeBasedOnSample] =
+      "true";
+  auto cursor = TaskCursor::create(params);
+  cursor->task()->addSplit("0", makeHiveSplit(filePath->path));
+  cursor->task()->noMoreSplits("0");
+
+  int totalRows = 0;
+  int batchIdx = 0;
+  constexpr uint64_t kMaxAcceptableStringBytes = 20UL << 20;
+  while (cursor->moveNext()) {
+    auto batch = cursor->current()->as<RowVector>();
+    auto& child = batch->childAt(0);
+    auto actualStringBytes = computeActualStringBytes(child);
+
+    // Verify long string rows.
+    auto* sv = child->as<SimpleVector<StringView>>();
+    for (int32_t row = 0; row < child->size(); ++row) {
+      if (!child->isNullAt(row) && totalRows + row >= kNumShortEntries) {
+        EXPECT_EQ(sv->valueAt(row).size(), kLongStringLen)
+            << "row " << (totalRows + row);
+      }
+    }
+
+    LOG(INFO) << "DWRF batch[" << batchIdx << "]: rows=" << batch->size()
+              << " actualStringBytes=" << actualStringBytes;
+    EXPECT_LE(actualStringBytes, kMaxAcceptableStringBytes)
+        << "DWRF batch " << batchIdx << " too large";
+    totalRows += batch->size();
+    batchIdx++;
+  }
+  EXPECT_EQ(totalRows, kNumRows);
 }
