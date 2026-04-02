@@ -167,6 +167,18 @@ RowVectorPtr TableScan::getOutput() {
   SuspendedSection suspendedSection(driverCtx_->driver);
   auto exitCurStatusGuard = folly::makeGuard([this]() { curStatus_ = ""; });
 
+  // Return buffered chunk from previous batch truncation (stored in reverse).
+  if (!bufferedOutputs_.empty()) {
+    auto data = std::move(bufferedOutputs_.back());
+    bufferedOutputs_.pop_back();
+    auto lockedStats = stats_.wlock();
+    lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+    outputRows_ += data->size();
+    this->setRuntimeMetric(
+        kHasBeenProcessedRowCount, folly::to<std::string>(outputRows_));
+    return data;
+  }
+
   if (noMoreSplits_) {
     return nullptr;
   }
@@ -408,12 +420,40 @@ RowVectorPtr TableScan::getOutput() {
       auto data = dataOptional.value();
       if (data) {
         if (data->size() > 0) {
-          lockedStats->addInputVector(data->estimateFlatSize(), data->size());
+          // Compute maxFilteringRatio_ with original data size before
+          // truncation.
           constexpr int kMaxSelectiveBatchSizeMultiplier = 4;
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
                1.0 / kMaxSelectiveBatchSizeMultiplier});
+
+          // Truncate batch BEFORE updating stats if skew was detected.
+          if (enableEstimateBytesPerRow_ && bytesPerRowLastBatch_.has_value() &&
+              data->size() > 1) {
+            const auto preferredBytes = queryConfig.preferredOutputBatchBytes();
+            auto safeRows = static_cast<int64_t>(
+                preferredBytes / bytesPerRowLastBatch_.value());
+            safeRows = std::max<int64_t>(safeRows, 1);
+            if (static_cast<int64_t>(data->size()) > safeRows) {
+              LOG(WARNING) << "TableScan splitting batch: rows=" << data->size()
+                           << " safeRows=" << safeRows
+                           << " bytesPerRow=" << bytesPerRowLastBatch_.value();
+              // Split into chunks in reverse order for pop_back retrieval.
+              auto totalRows = static_cast<int64_t>(data->size());
+              int64_t offset = totalRows;
+              while (offset > safeRows) {
+                auto start = std::max(offset - safeRows, safeRows);
+                bufferedOutputs_.push_back(std::dynamic_pointer_cast<RowVector>(
+                    data->slice(start, offset - start)));
+                offset = start;
+              }
+              data = std::dynamic_pointer_cast<RowVector>(
+                  data->slice(0, safeRows));
+            }
+          }
+
+          lockedStats->addInputVector(data->estimateFlatSize(), data->size());
           // will be used in FilterProject operator
           driverCtx_->currentSplitStr = currentSplitStr_;
 
