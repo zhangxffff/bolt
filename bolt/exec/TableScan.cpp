@@ -30,6 +30,7 @@
 
 #include <folly/ScopeGuard.h>
 #include <glog/logging.h>
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 
@@ -478,20 +479,59 @@ RowVectorPtr TableScan::getOutput() {
                   continue;
                 }
                 auto* flatLeaf = leaf->asUnchecked<FlatVector<StringView>>();
-                uint64_t colBytes = 0, colMaxLen = 0;
-                uint32_t nonNullCount = 0;
+                // Collect per-row string lengths
+                std::vector<uint64_t> rowLens;
+                rowLens.reserve(data->size());
                 for (int32_t row = 0; row < data->size(); ++row) {
                   if (!child->isNullAt(row)) {
                     auto idx = child->wrappedIndex(row);
                     if (idx < flatLeaf->size()) {
-                      auto len = static_cast<uint64_t>(
-                          flatLeaf->valueAtFast(idx).size());
-                      colBytes += len;
-                      if (len > colMaxLen) {
-                        colMaxLen = len;
-                      }
-                      nonNullCount++;
+                      rowLens.push_back(flatLeaf->valueAtFast(idx).size());
                     }
+                  }
+                }
+                uint64_t colBytes = 0, colMinLen = UINT64_MAX, colMaxLen = 0;
+                for (auto len : rowLens) {
+                  colBytes += len;
+                  colMinLen = std::min(colMinLen, len);
+                  colMaxLen = std::max(colMaxLen, len);
+                }
+                uint64_t colMedian = 0;
+                if (!rowLens.empty()) {
+                  auto mid = rowLens.size() / 2;
+                  std::nth_element(
+                      rowLens.begin(), rowLens.begin() + mid, rowLens.end());
+                  colMedian = rowLens[mid];
+                } else {
+                  colMinLen = 0;
+                }
+                // Collect dictionary entry lengths
+                uint64_t dictMin = UINT64_MAX, dictMax = 0, dictTotal = 0;
+                uint64_t dictMedian = 0;
+                int32_t dictNonNull = 0;
+                {
+                  std::vector<uint64_t> dictLens;
+                  dictLens.reserve(flatLeaf->size());
+                  for (int32_t di = 0; di < flatLeaf->size(); ++di) {
+                    if (!flatLeaf->isNullAt(di)) {
+                      auto len = static_cast<uint64_t>(
+                          flatLeaf->valueAtFast(di).size());
+                      dictLens.push_back(len);
+                      dictTotal += len;
+                      dictMin = std::min(dictMin, len);
+                      dictMax = std::max(dictMax, len);
+                    }
+                  }
+                  dictNonNull = dictLens.size();
+                  if (!dictLens.empty()) {
+                    auto mid = dictLens.size() / 2;
+                    std::nth_element(
+                        dictLens.begin(),
+                        dictLens.begin() + mid,
+                        dictLens.end());
+                    dictMedian = dictLens[mid];
+                  } else {
+                    dictMin = 0;
                   }
                 }
                 LOG(WARNING)
@@ -499,9 +539,14 @@ RowVectorPtr TableScan::getOutput() {
                     << " encoding=" << child->encoding()
                     << " leafSize=" << leaf->size()
                     << " leafRetained=" << leaf->retainedSize()
-                    << " actualBytes=" << colBytes << " avgLen="
-                    << (nonNullCount > 0 ? colBytes / nonNullCount : 0)
-                    << " maxLen=" << colMaxLen << " nonNull=" << nonNullCount;
+                    << " actualBytes=" << colBytes << " row{min=" << colMinLen
+                    << " max=" << colMaxLen << " med=" << colMedian << " avg="
+                    << (rowLens.size() > 0 ? colBytes / rowLens.size() : 0)
+                    << " cnt=" << rowLens.size() << "}"
+                    << " dict{min=" << dictMin << " max=" << dictMax
+                    << " med=" << dictMedian << " avg="
+                    << (dictNonNull > 0 ? dictTotal / dictNonNull : 0)
+                    << " cnt=" << dictNonNull << "}";
               }
             }
           }

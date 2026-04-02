@@ -76,8 +76,11 @@ arrow::Status BoltShuffleWriterV2::split(
       for (uint32_t i = fixedWidthColumnCount_; i < simpleColumnIndices_.size();
            ++i) {
         auto colIdx = simpleColumnIndices_[i];
-        auto column =
+        auto* column =
             rv->childAt(colIdx)->asFlatVector<bytedance::bolt::StringView>();
+        if (!column) {
+          continue;
+        }
         for (int32_t row = 0; row < column->size(); ++row) {
           if (!column->isNullAt(row)) {
             totalActualStringBytes += column->valueAt(row).size();
