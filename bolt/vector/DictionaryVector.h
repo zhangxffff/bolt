@@ -173,44 +173,36 @@ class DictionaryVector : public SimpleVector<T> {
 
   uint64_t estimateFlatSize() const override {
     if constexpr (std::is_same_v<T, StringView>) {
-      constexpr int kSampleSize = 8;
       if (BaseVector::length_ > 0) {
-        bool wasInitialized = initialized_;
         // Ensure initialized (may load lazy dictionaryValues_).
         const_cast<DictionaryVector<T>*>(this)->loadedVector();
         if (!initialized_) {
-          LOG_FIRST_N(WARNING, 5)
-              << "DictionaryVector::estimateFlatSize: not initialized"
-              << " wasInitialized=" << wasInitialized
-              << " length=" << BaseVector::length_
-              << " dictValuesEncoding=" << dictionaryValues_->encoding();
           return BaseVector::estimateFlatSize();
         }
-        uint64_t sampleTotal = 0;
-        int sampleCount = 0;
-        auto step =
-            std::max<vector_size_t>(BaseVector::length_ / kSampleSize, 1);
-        for (vector_size_t i = 0;
-             i < BaseVector::length_ && sampleCount < kSampleSize;
-             i += step) {
+        uint64_t total = 0;
+        uint32_t maxLen = 0;
+        uint32_t nonNullCount = 0;
+        for (vector_size_t i = 0; i < BaseVector::length_; ++i) {
           if (!isNullAt(i)) {
-            sampleTotal += valueAt(i).size();
-            sampleCount++;
+            auto len = valueAt(i).size();
+            total += len;
+            maxLen = std::max(maxLen, len);
+            nonNullCount++;
           }
         }
-        if (sampleCount > 0) {
-          auto sampledEstimate =
-              (sampleTotal / sampleCount) * BaseVector::length_;
-          auto defaultEstimate = BaseVector::estimateFlatSize();
-          LOG_FIRST_N(WARNING, 5)
-              << "DictionaryVector::estimateFlatSize: sampled"
-              << " length=" << BaseVector::length_
-              << " sampleAvg=" << (sampleTotal / sampleCount)
-              << " sampledEstimate=" << sampledEstimate
-              << " defaultEstimate=" << defaultEstimate
-              << " result=" << std::max(sampledEstimate, defaultEstimate);
-          return std::max(sampledEstimate, defaultEstimate);
+        auto defaultEstimate = BaseVector::estimateFlatSize();
+        auto result = std::max(total, defaultEstimate);
+        if (total > 2 * defaultEstimate) {
+          LOG(WARNING) << "DictionaryVector::estimateFlatSize skew:"
+                       << " rows=" << BaseVector::length_
+                       << " nonNull=" << nonNullCount
+                       << " actualTotal=" << total
+                       << " defaultEstimate=" << defaultEstimate << " avgLen="
+                       << (nonNullCount > 0 ? total / nonNullCount : 0)
+                       << " maxLen=" << maxLen
+                       << " dictSize=" << dictionaryValues_->size();
         }
+        return result;
       }
     }
     return BaseVector::estimateFlatSize();
