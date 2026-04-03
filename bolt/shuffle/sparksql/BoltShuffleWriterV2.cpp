@@ -91,6 +91,25 @@ arrow::Status BoltShuffleWriterV2::split(
                 dictVec->maxValueSize().has_value()
                     ? std::to_string(dictVec->maxValueSize().value())
                     : "nullopt");
+          } else {
+            // Might be DictionaryVector wrapping DictionaryVector.
+            // Walk the encoding layers to understand the structure.
+            std::string layers;
+            const bytedance::bolt::BaseVector* cur = child.get();
+            for (int depth = 0; depth < 5 && cur; ++depth) {
+              layers += fmt::format(
+                  " [{}:enc={},size={}]", depth, cur->encoding(), cur->size());
+              if (cur->encoding() ==
+                  bytedance::bolt::VectorEncoding::Simple::DICTIONARY) {
+                cur = cur->valueVector().get();
+              } else {
+                break;
+              }
+            }
+            extraInfo = fmt::format(
+                " NOT_StringView typeKind={} layers:{}",
+                static_cast<int>(child->typeKind()),
+                layers);
           }
         }
         LOG_FIRST_N(WARNING, 200)
