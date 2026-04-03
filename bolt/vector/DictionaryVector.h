@@ -180,11 +180,11 @@ class DictionaryVector : public SimpleVector<T> {
           return BaseVector::estimateFlatSize();
         }
         uint64_t total = 0;
-        uint32_t maxLen = 0;
+        uint64_t maxLen = 0;
         uint32_t nonNullCount = 0;
         for (vector_size_t i = 0; i < BaseVector::length_; ++i) {
           if (!isNullAt(i)) {
-            auto len = valueAt(i).size();
+            uint64_t len = valueAt(i).size();
             total += len;
             maxLen = std::max(maxLen, len);
             nonNullCount++;
