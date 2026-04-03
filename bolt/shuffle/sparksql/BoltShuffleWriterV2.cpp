@@ -75,7 +75,7 @@ arrow::Status BoltShuffleWriterV2::split(
       auto& child = rv->childAt(colIdx);
       if (child) {
         auto childEstimate = child->estimateFlatSize();
-        LOG_FIRST_N(WARNING, 3)
+        LOG_FIRST_N(WARNING, 200)
             << "ShuffleWriter pre-flatten col[" << colIdx << "]"
             << " encoding=" << child->encoding() << " size=" << child->size()
             << " estimateFlatSize=" << childEstimate;
