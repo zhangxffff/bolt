@@ -42,6 +42,7 @@
 #include "bolt/type/Type.h"
 #include "bolt/vector/BaseVector.h"
 #include "bolt/vector/ComplexVector.h"
+#include "bolt/vector/DictionaryVector.h"
 namespace bytedance::bolt::shuffle::sparksql {
 
 #define V2_RUNTIME_CHECK 0
