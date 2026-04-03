@@ -75,10 +75,28 @@ arrow::Status BoltShuffleWriterV2::split(
       auto& child = rv->childAt(colIdx);
       if (child) {
         auto childEstimate = child->estimateFlatSize();
+        std::string extraInfo;
+        if (child->encoding() ==
+            bytedance::bolt::VectorEncoding::Simple::DICTIONARY) {
+          auto* dictVec = child->as<
+              bytedance::bolt::DictionaryVector<bytedance::bolt::StringView>>();
+          if (dictVec) {
+            auto dictValues = dictVec->valueVector();
+            extraInfo = fmt::format(
+                " dictValuesEncoding={} dictValuesSize={} dictValuesRetained={}"
+                " maxValueSize={}",
+                dictValues->encoding(),
+                dictValues->size(),
+                dictValues->retainedSize(),
+                dictVec->maxValueSize().has_value()
+                    ? std::to_string(dictVec->maxValueSize().value())
+                    : "nullopt");
+          }
+        }
         LOG_FIRST_N(WARNING, 200)
             << "ShuffleWriter pre-flatten col[" << colIdx << "]"
             << " encoding=" << child->encoding() << " size=" << child->size()
-            << " estimateFlatSize=" << childEstimate;
+            << " estimateFlatSize=" << childEstimate << extraInfo;
       }
     }
     auto flatSize = rv->estimateFlatSize();
