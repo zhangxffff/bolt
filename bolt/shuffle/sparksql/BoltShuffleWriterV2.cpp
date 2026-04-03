@@ -113,10 +113,6 @@ arrow::Status BoltShuffleWriterV2::split(
                 layers);
           }
         }
-        LOG_FIRST_N(WARNING, 200)
-            << "ShuffleWriter pre-flatten col[" << colIdx << "]"
-            << " encoding=" << child->encoding() << " size=" << child->size()
-            << " estimateFlatSize=" << childEstimate << extraInfo;
       }
     }
     auto flatSize = rv->estimateFlatSize();
@@ -124,6 +120,7 @@ arrow::Status BoltShuffleWriterV2::split(
     // --- Diagnostic: check post-flatten actual string bytes vs estimate ---
     {
       uint64_t totalActualStringBytes = 0;
+      std::string perColInfo;
       for (uint32_t i = fixedWidthColumnCount_; i < simpleColumnIndices_.size();
            ++i) {
         auto colIdx = simpleColumnIndices_[i];
@@ -132,10 +129,15 @@ arrow::Status BoltShuffleWriterV2::split(
         if (!column) {
           continue;
         }
+        uint64_t colBytes = 0;
         for (int32_t row = 0; row < column->size(); ++row) {
           if (!column->isNullAt(row)) {
-            totalActualStringBytes += column->valueAt(row).size();
+            colBytes += column->valueAt(row).size();
           }
+        }
+        totalActualStringBytes += colBytes;
+        if (colBytes > 1024 * 1024) { // only log cols > 1MB
+          perColInfo += fmt::format(" c{}={}", colIdx, colBytes);
         }
       }
       if (flatSize > 0 && totalActualStringBytes > 2 * flatSize) {
@@ -143,7 +145,7 @@ arrow::Status BoltShuffleWriterV2::split(
                      << " preFlattenEstimate=" << flatSize
                      << " actualStringBytes=" << totalActualStringBytes
                      << " ratio=" << totalActualStringBytes / flatSize << "x"
-                     << " memLimit=" << memLimit;
+                     << " memLimit=" << memLimit << " bigCols:" << perColInfo;
       }
     }
     // --- End diagnostic ---
