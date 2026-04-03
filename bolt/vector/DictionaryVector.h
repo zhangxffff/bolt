@@ -174,7 +174,18 @@ class DictionaryVector : public SimpleVector<T> {
   uint64_t estimateFlatSize() const override {
     if constexpr (std::is_same_v<T, StringView>) {
       constexpr int kSampleSize = 8;
-      if (BaseVector::length_ > 0 && initialized_) {
+      if (BaseVector::length_ > 0) {
+        bool wasInitialized = initialized_;
+        // Ensure initialized (may load lazy dictionaryValues_).
+        const_cast<DictionaryVector<T>*>(this)->loadedVector();
+        if (!initialized_) {
+          LOG_FIRST_N(WARNING, 5)
+              << "DictionaryVector::estimateFlatSize: not initialized"
+              << " wasInitialized=" << wasInitialized
+              << " length=" << BaseVector::length_
+              << " dictValuesEncoding=" << dictionaryValues_->encoding();
+          return BaseVector::estimateFlatSize();
+        }
         uint64_t sampleTotal = 0;
         int sampleCount = 0;
         auto step =
@@ -191,6 +202,13 @@ class DictionaryVector : public SimpleVector<T> {
           auto sampledEstimate =
               (sampleTotal / sampleCount) * BaseVector::length_;
           auto defaultEstimate = BaseVector::estimateFlatSize();
+          LOG_FIRST_N(WARNING, 5)
+              << "DictionaryVector::estimateFlatSize: sampled"
+              << " length=" << BaseVector::length_
+              << " sampleAvg=" << (sampleTotal / sampleCount)
+              << " sampledEstimate=" << sampledEstimate
+              << " defaultEstimate=" << defaultEstimate
+              << " result=" << std::max(sampledEstimate, defaultEstimate);
           return std::max(sampledEstimate, defaultEstimate);
         }
       }
