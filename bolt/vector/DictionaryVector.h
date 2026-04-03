@@ -171,6 +171,33 @@ class DictionaryVector : public SimpleVector<T> {
         indices_->size();
   }
 
+  uint64_t estimateFlatSize() const override {
+    if constexpr (std::is_same_v<T, StringView>) {
+      constexpr int32_t kMinMaxValueSize = 8 * 1024; // 8KB
+      constexpr int kSampleSize = 8;
+      if (maxValueSize_.has_value() &&
+          maxValueSize_.value() >= kMinMaxValueSize &&
+          BaseVector::length_ > 0 && initialized_) {
+        uint64_t sampleTotal = 0;
+        int sampleCount = 0;
+        auto step =
+            std::max<vector_size_t>(BaseVector::length_ / kSampleSize, 1);
+        for (vector_size_t i = 0;
+             i < BaseVector::length_ && sampleCount < kSampleSize;
+             i += step) {
+          if (!isNullAt(i)) {
+            sampleTotal += valueAt(i).size();
+            sampleCount++;
+          }
+        }
+        if (sampleCount > 0) {
+          return (sampleTotal / sampleCount) * BaseVector::length_;
+        }
+      }
+    }
+    return BaseVector::estimateFlatSize();
+  }
+
   uint64_t estimateExportArrowSize() const override {
     uint64_t avgValueSize = dictionaryValues_->estimateExportArrowSize() /
         std::max<vector_size_t>(dictionaryValues_->size(), 1);
