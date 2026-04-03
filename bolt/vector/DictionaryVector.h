@@ -171,26 +171,10 @@ class DictionaryVector : public SimpleVector<T> {
         indices_->size();
   }
 
-  // Resolve maxValueSize through nested DictionaryVector layers (e.g., Filter
-  // wraps Parquet's DictionaryVector in another DictionaryVector).
-  std::optional<int32_t> effectiveMaxValueSize() const {
-    if (maxValueSize_.has_value()) {
-      return maxValueSize_;
-    }
-    auto* inner = dictionaryValues_->template as<DictionaryVector<T>>();
-    if (inner) {
-      return inner->effectiveMaxValueSize();
-    }
-    return std::nullopt;
-  }
-
   uint64_t estimateFlatSize() const override {
     if constexpr (std::is_same_v<T, StringView>) {
-      constexpr int32_t kMinMaxValueSize = 8 * 1024; // 8KB
       constexpr int kSampleSize = 8;
-      auto maxVal = effectiveMaxValueSize();
-      if (maxVal.has_value() && maxVal.value() >= kMinMaxValueSize &&
-          BaseVector::length_ > 0 && initialized_) {
+      if (BaseVector::length_ > 0 && initialized_) {
         uint64_t sampleTotal = 0;
         int sampleCount = 0;
         auto step =
