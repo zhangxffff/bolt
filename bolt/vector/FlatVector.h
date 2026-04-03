@@ -42,6 +42,16 @@
 #include "bolt/vector/TypeAliases.h"
 namespace bytedance::bolt {
 
+/// Statistics for string data in FlatVector<StringView>.
+/// When present, provides accurate string size information that may differ
+/// significantly from retainedSize (e.g., after flattening a DictionaryVector
+/// where shared string buffers cause retainedSize to underestimate actual
+/// materialized size).
+struct StringStats {
+  uint64_t totalBytes{0}; // sum of all StringView.size()
+  uint64_t maxLength{0}; // max single StringView.size()
+};
+
 // FlatVector is marked final to allow for inlining on virtual methods called
 // on a pointer that has the static type FlatVector<T>; this can be a
 // significant performance win when these methods are called in loops.
@@ -415,6 +425,26 @@ class FlatVector final : public SimpleVector<T> {
     return this->typeKind() != TypeKind::UNKNOWN;
   }
 
+  /// String statistics for accurate size estimation. Set during flatten
+  /// from DictionaryVector. nullopt means not computed (use default estimate).
+  const std::optional<StringStats>& stringStats() const {
+    return stringStats_;
+  }
+
+  void setStringStats(StringStats stats) {
+    stringStats_ = std::move(stats);
+  }
+
+  uint64_t estimateFlatSize() const override {
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (stringStats_.has_value()) {
+        return std::max(
+            stringStats_->totalBytes, BaseVector::estimateFlatSize());
+      }
+    }
+    return BaseVector::estimateFlatSize();
+  }
+
   uint64_t retainedSize() const override {
     auto size =
         BaseVector::retainedSize() + (values_ ? values_->capacity() : 0);
@@ -611,6 +641,10 @@ class FlatVector final : public SimpleVector<T> {
   // NOTE: we need to ensure 'stringBuffers_' and 'stringBufferSet_' are
   // always consistent.
   folly::F14FastSet<const Buffer*> stringBufferSet_;
+
+  // Accurate string size statistics. Set during flatten from DictionaryVector.
+  // nullopt = not computed, use default retainedSize-based estimate.
+  std::optional<StringStats> stringStats_;
 };
 
 template <>

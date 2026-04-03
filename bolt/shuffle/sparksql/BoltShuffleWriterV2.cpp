@@ -69,86 +69,10 @@ arrow::Status BoltShuffleWriterV2::split(
   {
     bytedance::bolt::NanosecondTimer timer(&flattenTime_);
     ensureLoaded(rv);
-    // Debug: log child encoding before estimateFlatSize
-    for (uint32_t i = fixedWidthColumnCount_; i < simpleColumnIndices_.size();
-         ++i) {
-      auto colIdx = simpleColumnIndices_[i];
-      auto& child = rv->childAt(colIdx);
-      if (child) {
-        auto childEstimate = child->estimateFlatSize();
-        std::string extraInfo;
-        if (child->encoding() ==
-            bytedance::bolt::VectorEncoding::Simple::DICTIONARY) {
-          auto* dictVec = child->as<
-              bytedance::bolt::DictionaryVector<bytedance::bolt::StringView>>();
-          if (dictVec) {
-            auto dictValues = dictVec->valueVector();
-            extraInfo = fmt::format(
-                " dictValuesEncoding={} dictValuesSize={} dictValuesRetained={}"
-                " maxValueSize={}",
-                dictValues->encoding(),
-                dictValues->size(),
-                dictValues->retainedSize(),
-                dictVec->maxValueSize().has_value()
-                    ? std::to_string(dictVec->maxValueSize().value())
-                    : "nullopt");
-          } else {
-            // Might be DictionaryVector wrapping DictionaryVector.
-            // Walk the encoding layers to understand the structure.
-            std::string layers;
-            const bytedance::bolt::BaseVector* cur = child.get();
-            for (int depth = 0; depth < 5 && cur; ++depth) {
-              layers += fmt::format(
-                  " [{}:enc={},size={}]", depth, cur->encoding(), cur->size());
-              if (cur->encoding() ==
-                  bytedance::bolt::VectorEncoding::Simple::DICTIONARY) {
-                cur = cur->valueVector().get();
-              } else {
-                break;
-              }
-            }
-            extraInfo = fmt::format(
-                " NOT_StringView typeKind={} layers:{}",
-                static_cast<int>(child->typeKind()),
-                layers);
-          }
-        }
-      }
-    }
-    auto flatSize = rv->estimateFlatSize();
     ensureFlatten(rv);
-    // --- Diagnostic: check post-flatten actual string bytes vs estimate ---
-    {
-      uint64_t totalActualStringBytes = 0;
-      std::string perColInfo;
-      for (uint32_t i = fixedWidthColumnCount_; i < simpleColumnIndices_.size();
-           ++i) {
-        auto colIdx = simpleColumnIndices_[i];
-        auto* column =
-            rv->childAt(colIdx)->asFlatVector<bytedance::bolt::StringView>();
-        if (!column) {
-          continue;
-        }
-        uint64_t colBytes = 0;
-        for (int32_t row = 0; row < column->size(); ++row) {
-          if (!column->isNullAt(row)) {
-            colBytes += column->valueAt(row).size();
-          }
-        }
-        totalActualStringBytes += colBytes;
-        if (colBytes > 1024 * 1024) { // only log cols > 1MB
-          perColInfo += fmt::format(" c{}={}", colIdx, colBytes);
-        }
-      }
-      if (flatSize > 0 && totalActualStringBytes > 2 * flatSize) {
-        LOG(WARNING) << "ShuffleWriter string mismatch: rows=" << rv->size()
-                     << " preFlattenEstimate=" << flatSize
-                     << " actualStringBytes=" << totalActualStringBytes
-                     << " ratio=" << totalActualStringBytes / flatSize << "x"
-                     << " memLimit=" << memLimit << " bigCols:" << perColInfo;
-      }
-    }
-    // --- End diagnostic ---
+    // Use post-flatten estimateFlatSize which leverages StringStats
+    // computed during flatten for accurate string size estimation.
+    auto flatSize = rv->estimateFlatSize();
     // try evict before split if current batch size is larger than memLimit
     if (flatSize > memLimit) {
       requestSpill_ = true;

@@ -879,9 +879,32 @@ void BaseVector::flattenVector(VectorPtr& vector) {
       BaseVector::flattenVector(loadedVector);
       return;
     }
-    default:
+    default: {
+      bool isStringType =
+          vector->type()->isVarchar() || vector->type()->isVarbinary();
       BaseVector::ensureWritable(
           SelectivityVector::empty(), vector->type(), vector->pool(), vector);
+      // Compute accurate string stats after flattening dictionary/sequence
+      // vectors. The flattened FlatVector may share string buffers from the
+      // original dictionary, causing retainedSize to underestimate actual
+      // materialized string bytes.
+      if (isStringType) {
+        auto* flat = vector->asFlatVector<StringView>();
+        if (flat && flat->size() > 0) {
+          StringStats stats;
+          for (vector_size_t i = 0; i < flat->size(); ++i) {
+            if (!flat->isNullAt(i)) {
+              auto len = flat->valueAtFast(i).size();
+              stats.totalBytes += len;
+              stats.maxLength =
+                  std::max(stats.maxLength, static_cast<uint64_t>(len));
+            }
+          }
+          flat->setStringStats(stats);
+        }
+      }
+      break;
+    }
   }
 }
 
