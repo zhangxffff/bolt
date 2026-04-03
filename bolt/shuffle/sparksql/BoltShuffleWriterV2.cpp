@@ -68,6 +68,19 @@ arrow::Status BoltShuffleWriterV2::split(
   {
     bytedance::bolt::NanosecondTimer timer(&flattenTime_);
     ensureLoaded(rv);
+    // Debug: log child encoding before estimateFlatSize
+    for (uint32_t i = fixedWidthColumnCount_; i < simpleColumnIndices_.size();
+         ++i) {
+      auto colIdx = simpleColumnIndices_[i];
+      auto& child = rv->childAt(colIdx);
+      if (child) {
+        auto childEstimate = child->estimateFlatSize();
+        LOG_FIRST_N(WARNING, 3)
+            << "ShuffleWriter pre-flatten col[" << colIdx << "]"
+            << " encoding=" << child->encoding() << " size=" << child->size()
+            << " estimateFlatSize=" << childEstimate;
+      }
+    }
     auto flatSize = rv->estimateFlatSize();
     ensureFlatten(rv);
     // --- Diagnostic: check post-flatten actual string bytes vs estimate ---
