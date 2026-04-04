@@ -320,7 +320,7 @@ arrow::Status BoltShuffleWriterV2::tryEvict(int64_t memLimit) {
             << " memLimit=" << memLimit << " executionPool="
             << (bytedance::bolt::memory::sparksql::ExecutionMemoryPool::inited()
                     ? bytedance::bolt::memory::sparksql::ExecutionMemoryPool::
-                          get()
+                          instance()
                               ->toString()
                     : "not_inited");
       }
