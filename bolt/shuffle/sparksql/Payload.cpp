@@ -461,7 +461,7 @@ arrow::Result<std::unique_ptr<BlockPayload>> BlockPayload::fromBuffers(
       ARROW_RETURN_IF(
           actualLength < 0,
           arrow::Status::Invalid("Writing compressed buffer out of bound."));
-      RETURN_NOT_OK(compressed->Resize(actualLength));
+      RETURN_NOT_OK(compressed->Resize(actualLength, /*shrink_to_fit=*/false));
     }
     auto payload = std::unique_ptr<BlockPayload>(new BlockPayload(
         Type::kCompressed,
