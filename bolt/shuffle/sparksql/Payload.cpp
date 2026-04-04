@@ -442,7 +442,8 @@ arrow::Result<std::unique_ptr<BlockPayload>> BlockPayload::fromBuffers(
           });
       const auto maxCompressedLength = metadataLength + totalCompressedLength;
       ARROW_ASSIGN_OR_RAISE(
-          compressed, arrow::AllocateResizableBuffer(initialCapacity, pool));
+          compressed,
+          arrow::AllocateResizableBuffer(maxCompressedLength, pool));
 
       auto output = compressed->mutable_data();
       int64_t actualLength = 0;
