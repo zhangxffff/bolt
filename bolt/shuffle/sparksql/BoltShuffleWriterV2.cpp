@@ -301,6 +301,30 @@ arrow::Status BoltShuffleWriterV2::tryEvict(int64_t memLimit) {
   if (vectorLayout_ == RowVectorLayout::kColumnar) {
     partitionWriter_->setRowFormat(false);
     RETURN_NOT_OK(evictFullPartitions());
+    // Release pool free memory back to global allocator, so that
+    // spill pool and splitBinaryType can allocate from freed capacity.
+    {
+      auto freeBeforeRelease = boltPool_->freeBytes();
+      auto usedBeforeRelease = boltPool_->currentBytes();
+      boltPool_->release();
+      auto freeAfterRelease = boltPool_->freeBytes();
+      auto usedAfterRelease = boltPool_->currentBytes();
+      if (freeBeforeRelease > 0) {
+        LOG(INFO)
+            << "tryEvict pool release:"
+            << " before{used=" << usedBeforeRelease
+            << " free=" << freeBeforeRelease << "}"
+            << " after{used=" << usedAfterRelease
+            << " free=" << freeAfterRelease << "}"
+            << " released=" << (freeBeforeRelease - freeAfterRelease)
+            << " memLimit=" << memLimit << " executionPool="
+            << (bytedance::bolt::memory::sparksql::ExecutionMemoryPool::inited()
+                    ? bytedance::bolt::memory::sparksql::ExecutionMemoryPool::
+                          get()
+                              ->toString()
+                    : "not_inited");
+      }
+    }
     int64_t minReserveBufferSize = 8 * 1024 * 1024; // 8MB
     if (requestSpill_ ||
         std::max(maxVariableMemoryUsage_, minReserveBufferSize) >=
@@ -312,9 +336,6 @@ arrow::Status BoltShuffleWriterV2::tryEvict(int64_t memLimit) {
                 << ", poolSize = " << boltPool_->currentBytes()
                 << ", poolFreeSize = " << boltPool_->freeBytes();
       shrinkBufferPoolMemory();
-      // Release pool free memory back to global allocator before spill,
-      // so that the spill pool can allocate from the freed capacity.
-      boltPool_->release();
       ARROW_ASSIGN_OR_RAISE(auto ret, sequentialEvictAllPartitions());
       if (!ret && partitionWriter_->canSpill()) {
         // all rows cached, payload cache not empty

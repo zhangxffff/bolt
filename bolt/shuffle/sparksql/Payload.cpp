@@ -442,8 +442,7 @@ arrow::Result<std::unique_ptr<BlockPayload>> BlockPayload::fromBuffers(
           });
       const auto maxCompressedLength = metadataLength + totalCompressedLength;
       ARROW_ASSIGN_OR_RAISE(
-          compressed,
-          arrow::AllocateResizableBuffer(maxCompressedLength, pool));
+          compressed, arrow::AllocateResizableBuffer(initialCapacity, pool));
 
       auto output = compressed->mutable_data();
       int64_t actualLength = 0;
@@ -461,7 +460,7 @@ arrow::Result<std::unique_ptr<BlockPayload>> BlockPayload::fromBuffers(
       ARROW_RETURN_IF(
           actualLength < 0,
           arrow::Status::Invalid("Writing compressed buffer out of bound."));
-      RETURN_NOT_OK(compressed->Resize(actualLength, /*shrink_to_fit=*/false));
+      RETURN_NOT_OK(compressed->Resize(actualLength));
     }
     auto payload = std::unique_ptr<BlockPayload>(new BlockPayload(
         Type::kCompressed,
