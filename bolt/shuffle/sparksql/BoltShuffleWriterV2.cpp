@@ -312,6 +312,9 @@ arrow::Status BoltShuffleWriterV2::tryEvict(int64_t memLimit) {
                 << ", poolSize = " << boltPool_->currentBytes()
                 << ", poolFreeSize = " << boltPool_->freeBytes();
       shrinkBufferPoolMemory();
+      // Release pool free memory back to global allocator before spill,
+      // so that the spill pool can allocate from the freed capacity.
+      boltPool_->release();
       ARROW_ASSIGN_OR_RAISE(auto ret, sequentialEvictAllPartitions());
       if (!ret && partitionWriter_->canSpill()) {
         // all rows cached, payload cache not empty
