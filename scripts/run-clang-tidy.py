@@ -27,6 +27,7 @@
 # --------------------------------------------------------------------------
 
 import argparse
+import math
 import multiprocessing
 import json
 import re
@@ -283,9 +284,9 @@ def check_output(output, warnings_as_errors=False):
     return re.search(r": error: ", output) is None
 
 
-def run_clang_tidy_batch(cmd_base, file_batch):
+def run_clang_tidy_batch(cmd_base, file_batch, timeout=None):
     """
-    Worker function to run clang-tidy on a small batch of files.
+    Worker function to run clang-tidy on a batch of files.
     """
     full_cmd = cmd_base + file_batch
     try:
@@ -296,8 +297,12 @@ def run_clang_tidy_batch(cmd_base, file_batch):
             text=True,  # Return strings, not bytes
             encoding="utf-8",
             errors="ignore",
+            timeout=timeout,
         )
         return proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired:
+        files = " ".join(file_batch)
+        return 1, "", f"clang-tidy timed out after {timeout}s on: {files}"
     except Exception as e:
         return 1, "", str(e)
 
@@ -517,19 +522,36 @@ def tidy(args):
     cmd_base.append("--extra-arg=-Wno-unknown-warning-option")
     max_cpus = int(os.environ.get("CI_NUM_THREADS", multiprocessing.cpu_count() // 2))
     jobs = args.jobs if args.jobs else max(1, max_cpus)
-    chunk_size = 1
+
+    # Each clang-tidy process uses significant memory (~1-2 GB for large C++
+    # translation units) because it parses the full header tree independently.
+    # Limit concurrent processes to avoid OOM in memory-constrained CI
+    # containers (exit code 137).  Batch multiple files per process so that
+    # clang-tidy can reuse parsed headers across files in the same batch.
+    # Override with CLANG_TIDY_MAX_JOBS if the default doesn't fit.
+    max_concurrent = min(
+        jobs, int(os.environ.get("CLANG_TIDY_MAX_JOBS", "4"))
+    )
+    chunk_size = max(1, math.ceil(len(files_to_process) / max_concurrent))
     file_chunks = [
         files_to_process[i : i + chunk_size]
         for i in range(0, len(files_to_process), chunk_size)
     ]
     print(
-        f"Running {clang_tidy_bin} on {len(files_to_process)} files with {jobs} jobs (Batch size: {chunk_size})..."
+        f"Running {clang_tidy_bin} on {len(files_to_process)} files "
+        f"with {max_concurrent} concurrent jobs "
+        f"(Batch size: {chunk_size})..."
     )
     final_exit_code = 0
 
-    with ThreadPoolExecutor(max_workers=jobs) as executor:
+    # Per-batch timeout: 120s per file in the batch, minimum 300s.
+    batch_timeout = max(300, 120 * chunk_size)
+
+    with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
         future_to_chunk = {
-            executor.submit(run_clang_tidy_batch, cmd_base, chunk): chunk
+            executor.submit(
+                run_clang_tidy_batch, cmd_base, chunk, batch_timeout
+            ): chunk
             for chunk in file_chunks
         }
 

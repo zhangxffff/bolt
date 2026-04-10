@@ -33,6 +33,7 @@ env:
 
 jobs:
   lint:
+    timeout-minutes: 15
     runs-on: ['self-hosted', 'medium']
     container:
       image: bolt-registry:5000/bolt-ci:20260114
