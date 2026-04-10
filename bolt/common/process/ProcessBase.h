@@ -81,6 +81,43 @@ bool hasBmi2();
 // True if the machine has ARM Neon instructions
 bool hasNeon();
 
+/// CPU information for the current system.
+struct CpuInfo {
+  /// CPU model name (e.g. "Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz").
+  std::string modelName;
+  /// Number of physical CPU cores.
+  int physicalCores{0};
+  /// Number of logical CPU cores (includes hyper-threading).
+  int logicalCores{0};
+  /// CPU architecture (e.g. "x86_64", "aarch64").
+  std::string architecture;
+
+  std::string toString() const;
+};
+
+/// Memory information for the current system.
+struct MemoryInfo {
+  /// Total physical memory in bytes.
+  int64_t totalMemoryBytes{0};
+  /// Available memory in bytes (MemAvailable from /proc/meminfo).
+  int64_t availableMemoryBytes{0};
+  /// Free memory in bytes (MemFree from /proc/meminfo).
+  int64_t freeMemoryBytes{0};
+  /// Resident set size of the current process in bytes.
+  int64_t processRssBytes{0};
+
+  std::string toString() const;
+};
+
+/// Returns CPU information for the current system.
+CpuInfo getCpuInfo();
+
+/// Returns memory information for the current system.
+MemoryInfo getMemoryInfo();
+
+/// Prints CPU and memory information to the log (INFO level).
+void logSystemInfo();
+
 } // namespace process
 } // namespace bolt
 } // namespace bytedance
