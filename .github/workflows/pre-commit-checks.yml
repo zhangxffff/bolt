@@ -69,4 +69,4 @@ jobs:
           free -h
       - name: Run pre-commit hooks
         run: |
-          pre-commit run --all-files
+          pre-commit run --all-files --verbose
