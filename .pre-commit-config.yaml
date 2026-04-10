@@ -74,8 +74,8 @@ repos:
     hooks:
       - id: license-header-check
         name: Check for license headers
-        entry: go run -C .github/license_check check_license.go
-        language: golang
+        entry: .github/license_check/check_license
+        language: system
         pass_filenames: true
       - id: clang-tidy
         name: Lint C++ files

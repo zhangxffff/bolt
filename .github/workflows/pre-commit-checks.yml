@@ -62,6 +62,10 @@ jobs:
           free -h
           cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || \
           cat /sys/fs/cgroup/memory.max 2>/dev/null || true
+      - name: Build license checker
+        run: |
+          cd .github/license_check
+          go build -o check_license check_license.go
       - name: Generate Compile Database
         run: |
           make compile_db_all
