@@ -46,6 +46,73 @@ class Multimap(dict):
             self[key].append(value)
 
 
+def _available_memory_gb() -> Optional[float]:
+    """Return available memory in GB, detecting cgroup limits in containers."""
+    try:
+        # cgroup v2 (modern Docker / Kubernetes)
+        cg2 = "/sys/fs/cgroup/memory.max"
+        if os.path.isfile(cg2):
+            raw = open(cg2).read().strip()
+            if raw != "max":
+                cg_limit = int(raw) / (1024 ** 3)
+                # Subtract current usage to get what's actually available.
+                usage_file = "/sys/fs/cgroup/memory.current"
+                if os.path.isfile(usage_file):
+                    used = int(open(usage_file).read().strip()) / (1024 ** 3)
+                    return max(0.5, cg_limit - used)
+                return cg_limit
+
+        # cgroup v1 (older Docker)
+        cg1 = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+        if os.path.isfile(cg1):
+            raw = int(open(cg1).read().strip())
+            # Very large values (close to maxint) mean "no limit".
+            if raw < 2 ** 62:
+                cg_limit = raw / (1024 ** 3)
+                usage_file = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+                if os.path.isfile(usage_file):
+                    used = int(open(usage_file).read().strip()) / (1024 ** 3)
+                    return max(0.5, cg_limit - used)
+                return cg_limit
+
+        # Bare metal / VM — read MemAvailable from /proc/meminfo
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024 ** 2)  # kB -> GB
+    except Exception:
+        pass
+    return None
+
+
+def _compute_max_concurrent(jobs: int) -> int:
+    """Decide how many clang-tidy processes to run in parallel.
+
+    Priority:
+      1. CLANG_TIDY_MAX_JOBS env var (explicit override)
+      2. Memory-based auto-tuning (~1.5 GB reserved per process)
+      3. Fallback to min(jobs, 4)
+    """
+    explicit = os.environ.get("CLANG_TIDY_MAX_JOBS")
+    if explicit is not None:
+        return max(1, min(jobs, int(explicit)))
+
+    mem_gb = _available_memory_gb()
+    if mem_gb is not None:
+        per_process_gb = float(os.environ.get("CLANG_TIDY_MEM_PER_JOB", "1.5"))
+        mem_based = max(1, int(mem_gb / per_process_gb))
+        result = min(jobs, mem_based)
+        print(
+            f"Available memory: {mem_gb:.1f} GB → "
+            f"max {result} concurrent clang-tidy processes "
+            f"({per_process_gb:.1f} GB/process)"
+        )
+        return result
+
+    # Conservative fallback when memory detection fails.
+    return min(jobs, 4)
+
+
 def _truthy_env(name: str) -> bool:
     v = os.environ.get(name)
     if v is None:
@@ -528,10 +595,7 @@ def tidy(args):
     # Limit concurrent processes to avoid OOM in memory-constrained CI
     # containers (exit code 137).  Batch multiple files per process so that
     # clang-tidy can reuse parsed headers across files in the same batch.
-    # Override with CLANG_TIDY_MAX_JOBS if the default doesn't fit.
-    max_concurrent = min(
-        jobs, int(os.environ.get("CLANG_TIDY_MAX_JOBS", "4"))
-    )
+    max_concurrent = _compute_max_concurrent(jobs)
     chunk_size = max(1, math.ceil(len(files_to_process) / max_concurrent))
     file_chunks = [
         files_to_process[i : i + chunk_size]
