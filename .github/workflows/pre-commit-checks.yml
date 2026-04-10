@@ -56,9 +56,17 @@ jobs:
       - name: Install pre-commit
         run: |
           pip install -r requirements.txt
+      - name: Show runner resources
+        run: |
+          echo "CPU: $(nproc) cores"
+          free -h
+          cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || \
+          cat /sys/fs/cgroup/memory.max 2>/dev/null || true
       - name: Generate Compile Database
         run: |
           make compile_db_all
+          echo "--- Memory after compile_db ---"
+          free -h
       - name: Run pre-commit hooks
         run: |
           pre-commit run --all-files
