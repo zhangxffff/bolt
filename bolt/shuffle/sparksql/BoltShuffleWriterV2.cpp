@@ -30,6 +30,7 @@
  */
 
 #include "BoltShuffleWriterV2.h"
+#include <atomic>
 #include "ArrowFixedSizeBufferOutputStream.h"
 #include "BoltShuffleWriter.h"
 #include "bolt/buffer/Buffer.h"
@@ -547,6 +548,13 @@ arrow::Status BoltShuffleWriterV2::allocatePartitionBuffer(
             partitionFixedWidthValueAddrsVector_[i][partitionId].empty());
         partitionFixedWidthValueAddrsVector_[i][partitionId].push_back(
             booleanValueBuffer->mutable_data());
+        static std::atomic<int> kAllocALogCount{0};
+        if (kAllocALogCount.fetch_add(1, std::memory_order_relaxed) < 32) {
+          LOG(INFO) << "[bool-alloc-A] pid=" << partitionId
+                    << " bidx=" << booleanColumnIndex << " i=" << i
+                    << " numBytes=" << numBytes
+                    << " bytesNeeded=" << bytesNeeded;
+        }
       } else if (booleanValueBuffer->size() < bytesNeeded) {
         int32_t oldSize = booleanValueBuffer->size();
         auto numBytes = std::max(bytesNeeded, 2 * oldSize);
@@ -555,6 +563,22 @@ arrow::Status BoltShuffleWriterV2::allocatePartitionBuffer(
             partitionFixedWidthValueAddrsVector_[i][partitionId].size() == 1);
         partitionFixedWidthValueAddrsVector_[i][partitionId][0] =
             booleanValueBuffer->mutable_data();
+        static std::atomic<int> kAllocBLogCount{0};
+        if (kAllocBLogCount.fetch_add(1, std::memory_order_relaxed) < 32) {
+          LOG(INFO) << "[bool-alloc-B] pid=" << partitionId
+                    << " bidx=" << booleanColumnIndex << " i=" << i
+                    << " oldSize=" << oldSize << " numBytes=" << numBytes
+                    << " bytesNeeded=" << bytesNeeded;
+        }
+      } else {
+        // (C) capacity is enough, nothing to do — but the inner vector MUST
+        // already be populated. Flag the invariant break loudly.
+        if (partitionFixedWidthValueAddrsVector_[i][partitionId].empty()) {
+          LOG(ERROR) << "[bool-alloc-C-BUG] vec empty but buffer exists"
+                     << " pid=" << partitionId << " bidx=" << booleanColumnIndex
+                     << " i=" << i << " bufSize=" << booleanValueBuffer->size()
+                     << " bytesNeeded=" << bytesNeeded;
+        }
       }
       booleanColumnIndex++;
     } else { // not boolean

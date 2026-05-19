@@ -31,7 +31,9 @@
 
 #include "BoltShuffleWriter.h"
 #include <arrow/io/memory.h>
+#include <atomic>
 #include <cstdint>
+#include <typeinfo>
 #include "bolt/buffer/Buffer.h"
 #include "bolt/common/base/Nulls.h"
 #include "bolt/shuffle/sparksql/Utils.h"
@@ -947,9 +949,19 @@ arrow::Status BoltShuffleWriter::splitBoolType(
     const uint8_t* srcAddr,
     const std::vector<std::vector<uint8_t*>>& dstAddrs) {
   for (auto& pid : partitionUsed_) {
-    uint8_t* dstaddr = dstAddrs[pid][0];
-    BOLT_DCHECK(dstaddr != nullptr);
-    splitBoolTypeInternal(srcAddr, dstaddr, pid);
+    const auto& vec = dstAddrs[pid];
+    if (vec.empty() || vec[0] == nullptr) {
+      LOG(ERROR) << "splitBoolType null dstaddr"
+                 << " pid=" << pid << " vec.size=" << vec.size()
+                 << " partition2RowCount=" << partition2RowCount_[pid]
+                 << " partitionBufferBase=" << partitionBufferBase_[pid]
+                 << " partitionBufferSize=" << partitionBufferSize_[pid]
+                 << " splitState=" << static_cast<int>(splitState_)
+                 << " writerType=" << typeid(*this).name();
+      return arrow::Status::Invalid(
+          "splitBoolType: dstaddr is null for pid=" + std::to_string(pid));
+    }
+    splitBoolTypeInternal(srcAddr, vec[0], pid);
   }
   return arrow::Status::OK();
 }
@@ -1921,6 +1933,13 @@ void BoltShuffleWriter::stat() const {
 }
 
 arrow::Status BoltShuffleWriter::resetPartitionBuffer(uint32_t partitionId) {
+  {
+    static std::atomic<int> kResetLogCount{0};
+    if (kResetLogCount.fetch_add(1, std::memory_order_relaxed) < 16) {
+      LOG(WARNING) << "resetPartitionBuffer called pid=" << partitionId
+                   << " writerType=" << typeid(*this).name();
+    }
+  }
   // Reset fixed-width partition buffers
   for (auto i = 0; i < fixedWidthColumnCount_; ++i) {
     partitionValidityAddrs_[i][partitionId] = nullptr;
