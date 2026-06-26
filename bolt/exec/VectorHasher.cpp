@@ -669,11 +669,34 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
 
         return common::createBigintValues(values, nullAllowed);
       }
+      break;
+    case TypeKind::VARCHAR:
       [[fallthrough]];
+    case TypeKind::VARBINARY:
+      // BytesValues requires a non-empty value set.
+      if (!distinctOverflow_ && !uniqueValues_.empty()) {
+        std::vector<std::string> values;
+        values.reserve(uniqueValues_.size());
+        for (const auto& value : uniqueValues_) {
+          const auto size = value.size();
+          if (size <= sizeof(int64_t)) {
+            // Strings of up to 8 bytes are stored inline in 'data_'.
+            const int64_t inlined = value.data();
+            values.emplace_back(reinterpret_cast<const char*>(&inlined), size);
+          } else {
+            // Longer strings live in 'uniqueValuesStorage_' and 'data_' holds
+            // a pointer to their bytes.
+            values.emplace_back(
+                reinterpret_cast<const char*>(value.data()), size);
+          }
+        }
+        return std::make_unique<common::BytesValues>(values, nullAllowed);
+      }
+      break;
     default:
-      // TODO Add support for strings.
-      return nullptr;
+      break;
   }
+  return nullptr;
 }
 
 namespace {

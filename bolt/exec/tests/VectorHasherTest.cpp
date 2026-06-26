@@ -587,6 +587,56 @@ TEST_F(VectorHasherTest, dateIds) {
   EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
 }
 
+TEST_F(VectorHasherTest, stringIds) {
+  // Mixes short strings (<= 8 bytes, stored inline in UniqueValue) and long
+  // strings (> 8 bytes, stored in the hasher's string buffer) to exercise both
+  // reconstruction paths in getFilter().
+  std::vector<std::string> strings = {
+      "a", "bb", "click", "event_login", "a_long_event_name_value"};
+  auto vector = makeFlatVector<StringView>(
+      strings.size(), [&](auto row) { return StringView(strings[row]); });
+  auto hasher = exec::VectorHasher::create(VARCHAR(), 1);
+  raw_vector<uint64_t> hashes(vector->size());
+  SelectivityVector rows(vector->size());
+  hasher->decode(*vector, rows);
+  // Populates the distinct value set that getFilter() reads from.
+  hasher->computeValueIds(rows, hashes);
+
+  auto filter = hasher->getFilter(false);
+  ASSERT_TRUE(filter != nullptr);
+  auto* bytesValues = dynamic_cast<common::BytesValues*>(filter.get());
+  ASSERT_TRUE(bytesValues != nullptr);
+  EXPECT_FALSE(bytesValues->testNull());
+  for (const auto& value : strings) {
+    EXPECT_TRUE(bytesValues->testBytes(value.data(), value.size())) << value;
+  }
+  EXPECT_FALSE(bytesValues->testBytes("missing", 7));
+
+  // nullAllowed is honored.
+  auto nullableFilter = hasher->getFilter(true);
+  ASSERT_TRUE(nullableFilter != nullptr);
+  EXPECT_TRUE(nullableFilter->testNull());
+}
+
+TEST_F(VectorHasherTest, stringIdsDistinctOverflow) {
+  // When the distinct value set overflows, no filter can be produced.
+  std::vector<std::string> strings;
+  strings.reserve(VectorHasher::kMaxDistinct + 10);
+  // Each value is well over 8 bytes so it consumes the hasher's distinct-string
+  // byte budget, ensuring the set overflows with margin.
+  for (int32_t i = 0; i < VectorHasher::kMaxDistinct + 10; ++i) {
+    strings.push_back("distinct_string_value_" + std::to_string(i));
+  }
+  auto vector = makeFlatVector<StringView>(
+      strings.size(), [&](auto row) { return StringView(strings[row]); });
+  auto hasher = exec::VectorHasher::create(VARCHAR(), 1);
+  raw_vector<uint64_t> hashes(vector->size());
+  SelectivityVector rows(vector->size());
+  hasher->decode(*vector, rows);
+  hasher->computeValueIds(rows, hashes);
+  EXPECT_EQ(hasher->getFilter(false), nullptr);
+}
+
 TEST_F(VectorHasherTest, boolNoNulls) {
   auto vector = BaseVector::create(BOOLEAN(), 100, pool());
   auto bools = vector->as<FlatVector<bool>>();
