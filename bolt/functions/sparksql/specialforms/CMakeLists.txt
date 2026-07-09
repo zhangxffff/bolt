@@ -35,6 +35,7 @@ bolt_add_library(
   GetStructField.cpp
   JsonSplit.cpp
   MakeDecimal.cpp
+  PackUntouchedColumns.cpp
   SparkCastExpr.cpp
 )
 

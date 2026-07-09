@@ -38,6 +38,7 @@
 #include "bolt/functions/sparksql/specialforms/GetStructField.h"
 #include "bolt/functions/sparksql/specialforms/JsonSplit.h"
 #include "bolt/functions/sparksql/specialforms/MakeDecimal.h"
+#include "bolt/functions/sparksql/specialforms/PackUntouchedColumns.h"
 #include "bolt/functions/sparksql/specialforms/SparkCastExpr.h"
 namespace bytedance::bolt::functions {
 void registerSparkSpecialFormFunctions() {
@@ -71,6 +72,12 @@ void registerSpecialFormGeneralFunctions(const std::string& prefix) {
   registerFunctionCallToSpecialForm(
       FromJsonCallToSpecialForm::kFromJson,
       std::make_unique<FromJsonCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      PackedSerializerCallToSpecialForm::kPackedSerialize,
+      std::make_unique<PackedSerializerCallToSpecialForm>());
+  registerFunctionCallToSpecialForm(
+      PackedDeserializerCallToSpecialForm::kPackedDeserialize,
+      std::make_unique<PackedDeserializerCallToSpecialForm>());
 }
 } // namespace sparksql
 } // namespace bytedance::bolt::functions
