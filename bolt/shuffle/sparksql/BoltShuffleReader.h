@@ -317,6 +317,10 @@ class BoltColumnarBatchDeserializerFactory {
     shuffleBufferSize_ = shuffleBufferSize;
   }
 
+  void setRowFormat(bytedance::bolt::row::RowFormat rowFormat) {
+    rowFormat_ = rowFormat;
+  }
+
  private:
   std::shared_ptr<arrow::Schema> schema_;
   std::shared_ptr<Codec> codec_;
@@ -327,6 +331,8 @@ class BoltColumnarBatchDeserializerFactory {
   int32_t numPartitions_{0};
   ShuffleWriterType shuffleWriterType_{ShuffleWriterType::V1};
   std::string partitioningShortName_;
+  bytedance::bolt::row::RowFormat rowFormat_{
+      bytedance::bolt::row::RowFormat::DENSE};
   arrow::MemoryPool* memoryPool_;
   bytedance::bolt::memory::MemoryPool* boltPool_;
 

@@ -768,8 +768,8 @@ BoltColumnarBatchDeserializerFactory::createDeserializer(
     zstdCodec_ = std::make_shared<AdaptiveParallelZstdCodec>(
         1 /*not used*/, false, memoryPool_, checksumEnabled_);
     rowBufferPool_ = std::make_shared<RowBufferPool>(memoryPool_);
-    row2ColConverter_ =
-        std::make_shared<ShuffleRowToColumnarConverter>(rowType_, boltPool_);
+    row2ColConverter_ = std::make_shared<ShuffleRowToColumnarConverter>(
+        rowType_, boltPool_, rowFormat_);
   }
   return std::make_unique<BoltColumnarBatchDeserializer>(
       std::move(in),
@@ -879,6 +879,7 @@ BoltShuffleReader::BoltShuffleReader(
   factory_->setShuffleWriterType(options.forceShuffleWriterType);
   factory_->setpartitioningShortName(options.partitionShortName);
   factory_->setShuffleBufferSize(options.shuffleBufferSize);
+  factory_->setRowFormat(options.rowFormat);
 }
 
 } // namespace bytedance::bolt::shuffle::sparksql
