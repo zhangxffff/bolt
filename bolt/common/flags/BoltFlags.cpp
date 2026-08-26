@@ -144,3 +144,29 @@ DEFINE_int32(
     cache_prefetch_min_pct,
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
+
+// ---------------------------------------------------------------------------
+// HDFS fault injection, for reproducing the teardown crash that followed a
+// degraded HDFS in production.
+//
+// ENABLED BY DEFAULT. This build deliberately makes every HDFS read slow and
+// fails a fraction of them. It is a diagnostic build and must never reach a
+// production queue that is serving real workloads. Set both to 0 to disable.
+//
+// Nothing about execution, object lifetime or teardown is altered - reads are
+// only made slow or made to fail, exactly as a sick DataNode would.
+// ---------------------------------------------------------------------------
+
+DEFINE_int32(
+    bolt_testing_hdfs_read_delay_ms,
+    100,
+    "Fault injection, on by default in this build. Milliseconds to stall every"
+    " HDFS read, simulating a degraded DataNode. This is what keeps async split"
+    " preloads parked and still in flight when a task is torn down. 0 disables");
+
+DEFINE_int32(
+    bolt_testing_hdfs_read_failure_pct,
+    5,
+    "Fault injection, on by default in this build. Percentage of HDFS reads"
+    " that fail, simulating the storage errors that aborted the original"
+    " stage. Range 0-100, 0 disables");

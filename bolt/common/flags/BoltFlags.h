@@ -28,6 +28,8 @@ DECLARE_bool(bolt_memory_leak_check_enabled);
 DECLARE_bool(bolt_memory_pool_capacity_transfer_across_tasks);
 DECLARE_bool(bolt_memory_pool_debug_enabled);
 DECLARE_bool(bolt_memory_use_hugepages);
+DECLARE_int32(bolt_testing_hdfs_read_delay_ms);
+DECLARE_int32(bolt_testing_hdfs_read_failure_pct);
 DECLARE_bool(bolt_suppress_memory_capacity_exceeding_error_message);
 DECLARE_bool(bolt_time_allocations);
 DECLARE_bool(bolt_collect_import_time);

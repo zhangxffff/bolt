@@ -29,6 +29,13 @@
  */
 
 #include "HdfsReadFile.h"
+
+#include <chrono>
+#include <mutex>
+#include <random>
+#include <thread>
+
+#include "bolt/common/flags/BoltFlags.h"
 #include "bolt/external/hdfs/ArrowHdfsInternal.h"
 namespace bytedance::bolt {
 
@@ -108,6 +115,7 @@ class HdfsReadFile::Impl {
   }
 
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const {
+    injectFault(offset, length);
     checkFileReadParameters(offset, length);
     if (!file_->handle_) {
       file_->open(driver_, hdfsClient_, filePath_, bufferSize_);
@@ -147,6 +155,44 @@ class HdfsReadFile::Impl {
 
   std::string getName() const {
     return filePath_;
+  }
+
+  // Stalls and fails a fraction of reads. On by default in this build.
+  // Every HDFS read - synchronous and async split preload alike - funnels
+  // through preadInternal, so this single point covers both.
+  void injectFault(uint64_t offset, uint64_t length) const {
+    const auto delayMs = FLAGS_bolt_testing_hdfs_read_delay_ms;
+    const auto failurePct = FLAGS_bolt_testing_hdfs_read_failure_pct;
+    if (delayMs > 0 || failurePct > 0) {
+      // Announce once per process. This build is not safe for real workloads
+      // and should be impossible to mistake for one.
+      static std::once_flag announced;
+      std::call_once(announced, [delayMs, failurePct]() {
+        LOG(ERROR) << "HDFS FAULT INJECTION BUILD: every read stalls " << delayMs
+                   << "ms and " << failurePct
+                   << "% of reads fail. Do not run real workloads on this build.";
+      });
+    }
+    if (delayMs > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+    }
+
+    if (failurePct <= 0) {
+      return;
+    }
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int32_t> dist(1, 100);
+    if (dist(rng) > failurePct) {
+      return;
+    }
+    // Deliberately not phrased as IOException/BlockMissingException: those
+    // match the corrupt-file whitelist and would make the reader skip the file
+    // instead of failing the task.
+    BOLT_FAIL(
+        "Fault injection: simulated HDFS read failure on {} at offset {} length {}",
+        filePath_,
+        offset,
+        length);
   }
 
   void checkFileReadParameters(uint64_t offset, uint64_t length) const {
