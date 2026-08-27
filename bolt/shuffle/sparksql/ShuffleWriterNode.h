@@ -135,7 +135,7 @@ class SparkShuffleWriter : public bytedance::bolt::exec::Operator {
   // addInput (split), reclaim (spill) and stop.
   uint64_t shuffleWriteTime_{0};
   std::unique_ptr<BoltArrowMemoryPool> arrowPool_;
-  std::shared_ptr<BoltShuffleWriter> shuffleWriter_;
+  std::shared_ptr<ShuffleWriter> shuffleWriter_;
   bool finished_ = false;
   ReportShuffleStatusCallback reportShuffleStatusCallback_;
 };
