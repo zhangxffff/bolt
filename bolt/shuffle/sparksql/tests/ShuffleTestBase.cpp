@@ -109,6 +109,8 @@ std::string shuffleModeToString(int mode) {
       return "V2";
     case 3:
       return "RowBased";
+    case 4:
+      return "Cell";
     default:
       BOLT_UNREACHABLE();
       return "Unknown";
@@ -641,6 +643,7 @@ ShuffleRunResult ShuffleTestBase::runShuffle(
     }
 
     ShuffleReaderOptions readerOptions;
+    readerOptions.partitionWriterType = param.writerType;
     readerOptions.numPartitions = param.numPartitions;
     readerOptions.forceShuffleWriterType = param.shuffleMode;
     readerOptions.rowFormat = param.rowFormat;
