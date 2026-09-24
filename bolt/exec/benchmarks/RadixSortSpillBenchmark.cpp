@@ -803,17 +803,18 @@ PointerFreeValidationResult runPointerFreeValidation(uint32_t scenario) {
 
   const auto inputStage =
       addAndSpillInputStage(buffer, fixture.data.inputs, split, runs);
-  const auto inputDiskRuns = buffer.testingSpilledRunCount();
+  const auto inputSpillStats = buffer.spilledStats();
+  BOLT_CHECK(inputSpillStats.has_value());
+  const auto inputDiskRuns = inputSpillStats->spillRuns;
   BOLT_CHECK_EQ(inputDiskRuns, runs);
   for (uint32_t index = inputStage.split; index < fixture.data.inputs.size();
        ++index) {
     buffer.addInput(fixture.data.inputs[index]);
   }
   buffer.noMoreInput();
-  const auto mergeStreams = buffer.testingMergeStreamCount();
   const auto expectedResidentStreams =
       inputStage.split < fixture.data.inputs.size() ? 1 : 0;
-  BOLT_CHECK_EQ(mergeStreams, inputDiskRuns + expectedResidentStreams);
+  const auto mergeStreams = inputDiskRuns + expectedResidentStreams;
   const auto preOutputReadStats =
       buffer.spillReadStats().value_or(common::SpillReadStats{});
 
@@ -1571,6 +1572,14 @@ BENCHMARK_DRAW_LINE();
 RADIX_SORT_SPILL_BENCHMARK_PAIR(
     single_key_very_wide_mixed_payload_256k_spill,
     20);
+BENCHMARK_DRAW_LINE();
+RADIX_SORT_SPILL_BENCHMARK_PAIR(double_real_i64_256k_spill, 21);
+BENCHMARK_DRAW_LINE();
+RADIX_SORT_SPILL_BENCHMARK_PAIR(double_real_i64_negative_zero_256k_spill, 22);
+BENCHMARK_DRAW_LINE();
+RADIX_SORT_SPILL_BENCHMARK_PAIR(single_real_special_256k_spill, 23);
+BENCHMARK_DRAW_LINE();
+RADIX_SORT_SPILL_BENCHMARK_PAIR(single_double_special_256k_spill, 24);
 #else
 RADIX_SORT_SPILL_BENCHMARK_PAIR(random_i64_10m_spill, 0);
 BENCHMARK_DRAW_LINE();

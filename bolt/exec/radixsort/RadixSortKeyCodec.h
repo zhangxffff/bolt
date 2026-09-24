@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -23,72 +24,70 @@
 
 #include "bolt/buffer/Buffer.h"
 #include "bolt/common/memory/Memory.h"
+#include "bolt/exec/radixsort/RadixSortKey.h"
 #include "bolt/type/Type.h"
 #include "bolt/vector/ComplexVector.h"
 
 namespace bytedance::bolt::exec::radixsort {
-namespace test {
-class RadixSortKeyCodecTestHelper;
-}
-
 class RadixSortRun;
 class RadixSortRunStorage;
 struct EncodedKeyView;
 enum class RadixSortKeyLayoutKind : uint8_t;
+class EncodedKeyReader;
+struct RadixSortKeyColumn;
 
-enum class EncodedKeyFormat : uint8_t {
-  kFixed64,
-  kVariableBinary,
-};
+using RadixSortPhysicalComparator = int32_t (*)(
+    const RadixSortKeyColumn&,
+    const char*,
+    const char*,
+    uint32_t,
+    uint32_t);
+using RadixSortEncodedComparator = int32_t (*)(
+    const RadixSortKeyColumn&,
+    EncodedKeyReader&,
+    EncodedKeyReader&);
 
 struct RadixSortKeyColumn {
   TypePtr type;
   CompareFlags flags;
   std::optional<uint64_t> maximumEncodedSize;
   std::optional<uint32_t> fixedPrefixOffset;
-  bool encodeDecodeSupported;
+  bool containsFloatingPoint{false};
+  mutable bool hasSpecialValues{false};
+  mutable RadixSortPhysicalComparator fixedComparator{nullptr};
+  mutable RadixSortPhysicalComparator variableComparator{nullptr};
+  mutable RadixSortEncodedComparator encodedComparator{nullptr};
   std::vector<RadixSortKeyColumn> children;
 };
 
-class EncodedKeyBatch {
- public:
-  EncodedKeyFormat format() const {
-    return format_;
+struct RadixSortFloatingPointDigit {
+  uint32_t offset{0};
+  uint8_t width{0};
+  bool descending{false};
+
+  template <bool HostOrderWords>
+  uint8_t extract(const char* key, uint32_t byte, uint32_t wordBytes) const {
+    if (width == sizeof(float)) {
+      auto value =
+          loadEncodedUnsigned<HostOrderWords, uint32_t>(key, offset, wordBytes);
+      value = normalizeFloatingPointKey(value, descending);
+      return static_cast<uint8_t>(value >> ((width - 1 - (byte - offset)) * 8));
+    }
+    auto value =
+        loadEncodedUnsigned<HostOrderWords, uint64_t>(key, offset, wordBytes);
+    value = normalizeFloatingPointKey(value, descending);
+    return static_cast<uint8_t>(value >> ((width - 1 - (byte - offset)) * 8));
   }
+};
 
-  vector_size_t size() const {
-    return size_;
-  }
-
-  uint64_t fixedKeyAt(vector_size_t row) const;
-
-  std::string_view variableKeyAt(vector_size_t row) const;
-
-  const BufferPtr& fixedKeys() const {
-    return fixedKeys_;
-  }
-
-  const BufferPtr& offsets() const {
-    return offsets_;
-  }
-
-  const BufferPtr& data() const {
-    return data_;
-  }
-
- private:
-  friend class RadixSortKeyCodec;
-
-  EncodedKeyFormat format_{EncodedKeyFormat::kVariableBinary};
-  vector_size_t size_{0};
-  BufferPtr fixedKeys_;
-  BufferPtr offsets_;
-  BufferPtr data_;
+struct RadixSortFloatingPointPlan {
+  uint32_t radixWidth{0};
+  bool complete{false};
+  std::array<RadixSortFloatingPointDigit, 32> digits{};
 };
 
 class RadixSortKeyCodec {
   friend class RadixSortRun;
-  friend class test::RadixSortKeyCodecTestHelper;
 
  public:
   static bool supportsEncodeDecode(const Type& type);
@@ -102,10 +101,6 @@ class RadixSortKeyCodec {
     return maximumEncodedSize_;
   }
 
-  bool canEncodeDecode() const {
-    return canEncodeDecode_;
-  }
-
   std::vector<uint32_t> leadingSkippableValidityOffsets(
       std::span<const uint8_t> keyMayHaveNulls,
       uint32_t radixWidth) const;
@@ -114,10 +109,38 @@ class RadixSortKeyCodec {
 
   uint32_t fixedPrefixColumnCount(uint32_t heapKeyOffset) const;
 
-  void encode(
-      const RowVector& input,
-      memory::MemoryPool* pool,
-      EncodedKeyBatch& result) const;
+  const RadixSortKeyColumn* singleFloatingPointColumn() const {
+    return columns_.size() == 1 &&
+            (columns_[0].type->kind() == TypeKind::REAL ||
+             columns_[0].type->kind() == TypeKind::DOUBLE)
+        ? &columns_[0]
+        : nullptr;
+  }
+
+  bool hasSpecialValues() const;
+
+  // Selects comparators once from the per-column special-value metadata.
+  void prepareSpecialComparators() const;
+
+  std::vector<uint8_t> specialValueFlags() const;
+
+  void mergeSpecialValueFlags(std::span<const uint8_t> flags);
+
+  RadixSortFloatingPointPlan floatingPointPlan(
+      const RadixSortKeyLayout& layout,
+      std::span<const uint8_t> mayHaveNulls) const;
+
+  int32_t compareEncoded(
+      std::string_view left,
+      std::string_view right,
+      uint32_t firstColumn = 0) const;
+
+  int32_t comparePhysical(
+      const RadixSortKeyLayout& layout,
+      const char* left,
+      const char* right,
+      std::string_view leftSuffix = {},
+      std::string_view rightSuffix = {}) const;
 
   void decode(
       std::span<const EncodedKeyView> keys,
@@ -129,16 +152,9 @@ class RadixSortKeyCodec {
       uint32_t firstColumn = 0) const;
 
  private:
-  void encodeSingleFixedFlat(
-      const RowVector& input,
-      memory::MemoryPool* pool,
-      EncodedKeyBatch& result) const;
-
   RadixSortKeyCodec(
       std::vector<RadixSortKeyColumn> columns,
-      EncodedKeyFormat format,
-      std::optional<uint64_t> maximumEncodedSize,
-      bool canEncodeDecode);
+      std::optional<uint64_t> maximumEncodedSize);
 
   bool canAppendSingleFixedFlat(
       const BaseVector& input,
@@ -150,10 +166,11 @@ class RadixSortKeyCodec {
       RadixSortRunStorage& arena,
       std::span<char* const> payloads) const;
 
-  void encodeAndAppendInline(
+  uint64_t append(
       const RowVector& input,
       RadixSortRunStorage& storage,
-      std::span<char* const> payloads) const;
+      std::span<char* const> payloads,
+      BufferPtr& sizeScratch) const;
 
   bool canDecodeSingleFixedColumn() const;
 
@@ -179,20 +196,7 @@ class RadixSortKeyCodec {
       std::span<const uint8_t> decodedColumns,
       std::span<const uint8_t> mayHaveNulls,
       uint32_t firstColumn,
-      uint32_t endColumn,
-      bool skipMaskedVariableColumns) const;
-
-  void decodeSuffixAt(
-      std::span<const EncodedKeyView> keys,
-      std::span<const uint8_t> decodedColumns,
-      std::span<const uint8_t> mayHaveNulls,
-      vector_size_t outputOffset,
-      memory::MemoryPool* scratchPool,
-      BufferPtr& cursorScratch,
-      RowVector& output,
-      std::span<const column_index_t> directKeyChannels,
-      uint64_t scratchWordsPerRow,
-      uint32_t firstColumn) const;
+      uint32_t endColumn) const;
 
   void decodeSuffixAtWithPreparedScratch(
       std::span<const EncodedKeyView> keys,
@@ -221,7 +225,7 @@ class RadixSortKeyCodec {
       RowVector& output,
       std::span<const column_index_t> directKeyChannels) const;
 
-  uint64_t encodeAndAppendVariable(
+  uint64_t appendVariable(
       const RowVector& input,
       RadixSortRunStorage& arena,
       std::span<char* const> payloads,
@@ -239,9 +243,10 @@ class RadixSortKeyCodec {
 
   std::vector<RadixSortKeyColumn> columns_;
   RowTypePtr rowType_;
-  EncodedKeyFormat format_;
   std::optional<uint64_t> maximumEncodedSize_;
-  bool canEncodeDecode_;
+  bool allFixedScalarColumns_;
+  uint32_t floatingPointEnd_{0};
+  mutable uint32_t specialComparisonEnd_{0};
   mutable std::vector<uint64_t> encodeCursorScratch_;
 };
 

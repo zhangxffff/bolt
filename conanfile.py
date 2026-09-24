@@ -142,7 +142,10 @@ class BoltConan(ConanFile):
 
     build_policy = "missing"
 
-    scm_url = "https://github.com/bytedance/bolt.git"
+    @property
+    def scm_url(self):
+        # The Conan user selects the GitHub owner, defaulting to upstream.
+        return f"https://github.com/{self.user or 'bytedance'}/bolt.git"
 
     def source(self):
         git = scm.Git(self)
@@ -312,7 +315,7 @@ class BoltConan(ConanFile):
         self.tool_requires("m4/1.4.19")
         self.tool_requires("bison/3.8.2")
         self.tool_requires("flex/2.6.4")
-        self.tool_requires("cmake/3.31.10", override=True)
+        self.tool_requires("cmake/3.31.10")
         self.tool_requires("ninja/1.11.1")
         self.tool_requires("protobuf/<host_version>")
         self.tool_requires("thrift/<host_version>")
@@ -725,6 +728,8 @@ class BoltConan(ConanFile):
         self.cpp_info.components["bolt_engine"].set_property(
             "cmake_target_name", "bolt::bolt_engine"
         )
+        if self.io_uring_supported():
+            self.cpp_info.components["bolt_engine"].defines.append("IO_URING_SUPPORTED")
         self.cpp_info.components["bolt_engine"].requires.extend(
             [
                 "arrow::arrow",

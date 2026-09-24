@@ -23,11 +23,7 @@
 #include "bolt/vector/BaseVector.h"
 #include "bolt/vector/ComplexVector.h"
 
-namespace bytedance::bolt::exec::radixsort {
-
-class EncodedKeyBatch;
-
-namespace test {
+namespace bytedance::bolt::exec::radixsort::test {
 
 struct RowIdMatchOptions {
   int64_t idBase{0};
@@ -45,17 +41,17 @@ class SortComparatorOracle {
       std::string_view left,
       std::string_view right);
 
-  static int32_t compareEncodedKeys(
-      const EncodedKeyBatch& keys,
-      vector_size_t left,
-      vector_size_t right);
-
   static int32_t compare(
       const BaseVector& left,
       vector_size_t leftIndex,
       const BaseVector& right,
       vector_size_t rightIndex,
       CompareFlags flags);
+
+  static bool hasDistinctEquivalentFloatingPointBits(
+      const BaseVector& values,
+      vector_size_t left,
+      vector_size_t right);
 
   static int32_t compareRows(
       const RowVector& left,
@@ -77,5 +73,4 @@ class SortComparatorOracle {
       RowIdMatchOptions options = {});
 };
 
-} // namespace test
-} // namespace bytedance::bolt::exec::radixsort
+} // namespace bytedance::bolt::exec::radixsort::test

@@ -32,15 +32,14 @@
 #include "bolt/exec/radixsort/RadixSortSpillSections.h"
 
 namespace bytedance::bolt::exec::radixsort {
+class RadixSortKeyCodec;
+
 constexpr uint64_t kRadixSortSpillBufferSize =
     (1UL << 20) - AlignedBuffer::kPaddedSize;
 constexpr uint32_t kCurrentRadixSortSpillFormat = 2;
 
 struct RadixSortSpillFile {
-  uint32_t id;
   std::string path;
-  uint64_t size{0};
-  uint64_t rowCount{0};
   common::CompressionKind compressionKind{common::CompressionKind_NONE};
 };
 
@@ -341,7 +340,8 @@ class RadixSortMerger {
       RadixSortKeyLayout keyLayout,
       std::vector<std::unique_ptr<RadixSortMergeStream>> streams,
       std::optional<size_t> memoryIndex = std::nullopt,
-      std::unique_ptr<RadixSortSpillReadBufferCache> bufferCache = nullptr);
+      std::unique_ptr<RadixSortSpillReadBufferCache> bufferCache = nullptr,
+      const RadixSortKeyCodec* keyCodec = nullptr);
 
   vector_size_t collectRows(
       vector_size_t count,
@@ -362,13 +362,10 @@ class RadixSortMerger {
       RadixSortSpillRun run,
       RadixSortSpillSectionMeta meta,
       memory::MemoryPool* pool,
-      bool spillUringEnabled);
+      bool spillUringEnabled,
+      folly::FunctionRef<void()> releaseMemory);
 
   void removeMemory();
-
-  size_t testingNumStreams() const {
-    return streams_.size();
-  }
 
  private:
   using StreamIndex = uint16_t;
@@ -438,6 +435,7 @@ class RadixSortMerger {
   }
 
   RadixSortKeyLayout keyLayout_;
+  const RadixSortKeyCodec* keyCodec_;
   union CompareFn {
     constexpr CompareFn() : fixed(nullptr) {}
 

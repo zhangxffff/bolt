@@ -27,7 +27,10 @@
 #include "bolt/functions/flinksql/String.h"
 #include "bolt/functions/flinksql/ToTimestampFunction.h"
 #include "bolt/functions/flinksql/URLFunctions.h"
+#include "bolt/functions/flinksql/specialforms/DecimalRound.h"
 #include "bolt/functions/flinksql/specialforms/FlinkCastExpr.h"
+#include "bolt/functions/lib/RegistrationHelpers.h"
+#include "bolt/functions/sparksql/Arithmetic.h"
 
 namespace bytedance::bolt::functions {
 // If the function registration order is Presto, Spark, Flink,
@@ -47,6 +50,10 @@ static void registerStringFunctions(const std::string& prefix) {
       {prefix + "lpad"});
   registerFunction<FlinkRPadFunction, Varchar, Varchar, int32_t, Varchar>(
       {prefix + "rpad"});
+  registerFunction<FlinkSubstrFunction, Varchar, Varchar, int32_t>(
+      {prefix + "substr", prefix + "substring"});
+  registerFunction<FlinkSubstrFunction, Varchar, Varchar, int32_t, int32_t>(
+      {prefix + "substr", prefix + "substring"});
   registerFunction<IsAlphaFunction, bool, Varchar>({prefix + "is_alpha"});
   registerFunction<IsDecimalFunction, bool, Varchar>({prefix + "is_decimal"});
   registerFunction<IsDigitFunction, bool, Varchar>({prefix + "is_digit"});
@@ -127,6 +134,20 @@ static void registerDatetimeFunctions(const std::string& prefix) {
 static void registerMathFunctions(const std::string& prefix) {
   registerPrestoMathFunctionAliases(prefix);
 
+  registerUnaryNumeric<sparksql::RoundFunction>({prefix + "round"});
+  registerFunction<sparksql::RoundFunction, int8_t, int8_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, int16_t, int16_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, int32_t, int32_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, int64_t, int64_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, float, float, int32_t>(
+      {prefix + "round"});
+  registerFunction<sparksql::RoundFunction, double, double, int32_t>(
+      {prefix + "round"});
+
   registerFunction<RandIntegerFunction, int32_t, int32_t>(
       {prefix + "rand_integer"});
   registerFunction<RandIntegerFunction, int32_t, int32_t, Constant<int32_t>>(
@@ -178,6 +199,10 @@ static void registerHashFunctions(const std::string& prefix) {
 namespace {
 
 void registerSpecialFormFunctions(const std::string& prefix) {
+  exec::registerFunctionCallToSpecialForm(
+      DecimalRoundCallToSpecialForm::kRoundDecimal,
+      std::make_unique<DecimalRoundCallToSpecialForm>());
+
   exec::registerFunctionCallToSpecialForm(
       "cast", std::make_unique<FlinkCastCallToSpecialForm>());
   exec::registerFunctionCallToSpecialForm(
