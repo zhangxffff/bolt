@@ -971,13 +971,11 @@ TEST_F(ParquetReaderTest, parseUnsignedInt1) {
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto expected = makeRowVector(
-      {makeFlatVector<uint8_t>({255, 2, 3}),
-       makeFlatVector<uint16_t>({65535, 2000, 3000}),
-       makeFlatVector<uint32_t>({4294967295, 2000000000, 3000000000}),
-       makeFlatVector<uint64_t>(
-           {18446744073709551615ULL,
-            2000000000000000000ULL,
-            3000000000000000000ULL})});
+      {makeFlatVector<int8_t>({-1, 2, 3}),
+       makeFlatVector<int16_t>({-1, 2000, 3000}),
+       makeFlatVector<int32_t>({-1, 2000000000, -1294967296}),
+       makeFlatVector<int64_t>(
+           {-1, 2000000000000000000LL, 3000000000000000000LL})});
   assertReadWithReaderAndExpected(rowType, *rowReader, expected, *pool_);
 }
 
@@ -986,13 +984,11 @@ TEST_F(ParquetReaderTest, parseUnsignedInt2) {
       ROW({"uint8", "uint16", "uint32", "uint64"},
           {SMALLINT(), SMALLINT(), INTEGER(), BIGINT()});
   auto expected = makeRowVector(
-      {makeFlatVector<uint16_t>({255, 2, 3}),
-       makeFlatVector<uint16_t>({65535, 2000, 3000}),
-       makeFlatVector<uint32_t>({4294967295, 2000000000, 3000000000}),
-       makeFlatVector<uint64_t>(
-           {18446744073709551615ULL,
-            2000000000000000000ULL,
-            3000000000000000000ULL})});
+      {makeFlatVector<int16_t>({255, 2, 3}),
+       makeFlatVector<int16_t>({-1, 2000, 3000}),
+       makeFlatVector<int32_t>({-1, 2000000000, -1294967296}),
+       makeFlatVector<int64_t>(
+           {-1, 2000000000000000000LL, 3000000000000000000LL})});
   assertReadWithExpected("uint.parquet", rowType, expected);
 }
 
@@ -1001,13 +997,11 @@ TEST_F(ParquetReaderTest, parseUnsignedInt3) {
       ROW({"uint8", "uint16", "uint32", "uint64"},
           {SMALLINT(), INTEGER(), INTEGER(), BIGINT()});
   auto expected = makeRowVector(
-      {makeFlatVector<uint16_t>({255, 2, 3}),
-       makeFlatVector<uint32_t>({65535, 2000, 3000}),
-       makeFlatVector<uint32_t>({4294967295, 2000000000, 3000000000}),
-       makeFlatVector<uint64_t>(
-           {18446744073709551615ULL,
-            2000000000000000000ULL,
-            3000000000000000000ULL})});
+      {makeFlatVector<int16_t>({255, 2, 3}),
+       makeFlatVector<int32_t>({65535, 2000, 3000}),
+       makeFlatVector<int32_t>({-1, 2000000000, -1294967296}),
+       makeFlatVector<int64_t>(
+           {-1, 2000000000000000000LL, 3000000000000000000LL})});
   assertReadWithExpected("uint.parquet", rowType, expected);
 }
 
@@ -1016,13 +1010,14 @@ TEST_F(ParquetReaderTest, parseUnsignedInt4) {
       ROW({"uint8", "uint16", "uint32", "uint64"},
           {SMALLINT(), INTEGER(), INTEGER(), DECIMAL(20, 0)});
   auto expected = makeRowVector(
-      {makeFlatVector<uint16_t>({255, 2, 3}),
-       makeFlatVector<uint32_t>({65535, 2000, 3000}),
-       makeFlatVector<uint32_t>({4294967295, 2000000000, 3000000000}),
-       makeFlatVector<uint128_t>(
-           {18446744073709551615ULL,
-            2000000000000000000ULL,
-            3000000000000000000ULL})});
+      {makeFlatVector<int16_t>({255, 2, 3}),
+       makeFlatVector<int32_t>({65535, 2000, 3000}),
+       makeFlatVector<int32_t>({-1, 2000000000, -1294967296}),
+       makeFlatVector<int128_t>(
+           {static_cast<int128_t>(18446744073709551615ULL),
+            2000000000000000000LL,
+            3000000000000000000LL},
+           DECIMAL(20, 0))});
 
   if constexpr (::bytedance::bolt::kSparkCompatible) {
     const std::string sample(getExampleFilePath("uint.parquet"));
@@ -1063,14 +1058,45 @@ TEST_F(ParquetReaderTest, parseUnsignedInt5) {
       ROW({"uint8", "uint16", "uint32", "uint64"},
           {SMALLINT(), INTEGER(), BIGINT(), DECIMAL(20, 0)});
   auto expected = makeRowVector(
-      {makeFlatVector<uint16_t>({255, 2, 3}),
-       makeFlatVector<uint32_t>({65535, 2000, 3000}),
-       makeFlatVector<uint64_t>({4294967295, 2000000000, 3000000000}),
-       makeFlatVector<uint128_t>(
-           {18446744073709551615ULL,
-            2000000000000000000ULL,
-            3000000000000000000ULL})});
+      {makeFlatVector<int16_t>({255, 2, 3}),
+       makeFlatVector<int32_t>({65535, 2000, 3000}),
+       makeFlatVector<int64_t>({4294967295, 2000000000, 3000000000}),
+       makeFlatVector<int128_t>(
+           {static_cast<int128_t>(18446744073709551615ULL),
+            2000000000000000000LL,
+            3000000000000000000LL},
+           DECIMAL(20, 0))});
   assertReadWithExpected("uint.parquet", rowType, expected);
+}
+
+TEST_F(ParquetReaderTest, unsignedIntUsesNativeVectorTypes) {
+  // Unsigned columns must be returned in the native C++ type of the requested
+  // type. Cast, ConstantVector and other consumers access the values through
+  // dynamic_cast to SimpleVector<NativeType>.
+  auto rowType =
+      ROW({"uint8", "uint16", "uint32", "uint64"},
+          {TINYINT(), SMALLINT(), BIGINT(), DECIMAL(20, 0)});
+  const std::string sample(getExampleFilePath("uint.parquet"));
+  dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  auto reader = createReader(sample, readerOptions);
+  auto rowReaderOpts = getReaderOpts(rowType);
+  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
+  auto rowReader = reader->createRowReader(rowReaderOpts);
+
+  VectorPtr result = BaseVector::create(rowType, 0, pool_.get());
+  ASSERT_EQ(rowReader->next(10, result), 3ULL);
+  auto* rowVector = result->asUnchecked<RowVector>();
+  auto child = [&](int32_t i) { return rowVector->childAt(i)->loadedVector(); };
+  EXPECT_NE(child(0)->as<SimpleVector<int8_t>>(), nullptr);
+  EXPECT_NE(child(1)->as<SimpleVector<int16_t>>(), nullptr);
+  EXPECT_NE(child(2)->as<SimpleVector<int64_t>>(), nullptr);
+  EXPECT_NE(child(3)->as<SimpleVector<int128_t>>(), nullptr);
+
+  auto constant = BaseVector::wrapInConstant(
+      1, 0, BaseVector::loadedVectorShared(rowVector->childAt(3)));
+  EXPECT_EQ(
+      constant->as<SimpleVector<int128_t>>()->valueAt(0),
+      static_cast<int128_t>(18446744073709551615ULL));
 }
 
 TEST_F(ParquetReaderTest, parseDate) {

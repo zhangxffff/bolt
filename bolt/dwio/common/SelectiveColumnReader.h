@@ -516,7 +516,8 @@ class SelectiveColumnReader {
 
   // Returns integer values for 'rows' cast to the width of
   // 'requestedType' in '*result', the related fileDataType is unsigned int
-  // type.
+  // type. Values are zero-extended when widened, and the result vector uses
+  // the native (signed) C++ type of 'requestedType'.
   void getUnsignedIntValues(
       RowSet rows,
       const TypePtr& requestedType,
@@ -526,7 +527,11 @@ class SelectiveColumnReader {
   // multiple times for consecutive subsets of 'rows'. If 'isFinal' is
   // true, this is free not to maintain the information mapping values
   // to rows. TODO: Consider isFinal as template parameter.
-  template <typename T, typename TVector>
+  // 'T' and 'TVector' are the types values are converted from and to.
+  // 'TResult' is the C++ type of the result vector. It must be the same size
+  // as 'TVector' and lets values converted as unsigned be returned in the
+  // native (signed) C++ type of 'type'.
+  template <typename T, typename TVector, typename TResult = TVector>
   void getFlatValues(
       RowSet rows,
       VectorPtr* FOLLY_NONNULL result,
