@@ -1099,6 +1099,34 @@ TEST_F(ParquetReaderTest, unsignedIntUsesNativeVectorTypes) {
       static_cast<int128_t>(18446744073709551615ULL));
 }
 
+TEST_F(ParquetReaderTest, unsignedIntStatisticsDoNotPruneRowGroups) {
+  // The only row group of uint.parquet has unsigned min and max that are
+  // misordered when read as signed values, e.g. uint64 min is
+  // 2000000000000000000 and max is 18446744073709551615 (-1 as BIGINT).
+  // Filters on such columns must not prune the row group.
+  auto rowType =
+      ROW({"uint8", "uint16", "uint32", "uint64"},
+          {SMALLINT(), INTEGER(), BIGINT(), BIGINT()});
+  auto expected = makeRowVector(
+      {makeFlatVector<int16_t>({2}),
+       makeFlatVector<int32_t>({2000}),
+       makeFlatVector<int64_t>({2000000000}),
+       makeFlatVector<int64_t>({2000000000000000000LL})});
+
+  {
+    FilterMap filters;
+    filters.insert({"uint32", exec::equal(2000000000)});
+    assertReadWithFilters(
+        "uint.parquet", rowType, std::move(filters), expected);
+  }
+  {
+    FilterMap filters;
+    filters.insert({"uint64", exec::equal(2000000000000000000LL)});
+    assertReadWithFilters(
+        "uint.parquet", rowType, std::move(filters), expected);
+  }
+}
+
 TEST_F(ParquetReaderTest, parseDate) {
   // date.parquet holds a single column (date: DATE) and
   // 25 rows.

@@ -95,6 +95,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
         std::unique_ptr<struct NgramTokenExtractor>,
         std::unique_ptr<NGramBloomFilter>>> nGramStats,
     const bolt::Type& type,
-    uint64_t numRowsInRowGroup);
+    uint64_t numRowsInRowGroup,
+    bool isUnsignedInteger);
 
 } // namespace bytedance::bolt::parquet

@@ -328,7 +328,7 @@ class ParquetData : public dwio::common::FormatData {
   bool checkColumnFilter(
       const thrift::ColumnChunk& columnChunk,
       common::Filter* filter,
-      const TypePtr& type,
+      const ParquetTypeWithId& type,
       size_t rowGroupId);
 
  protected:

@@ -37,6 +37,28 @@
 #include "bolt/type/filter/MapSubscriptFilter.h"
 namespace bytedance::bolt::parquet {
 
+namespace {
+
+bool isUnsignedInteger(const ParquetTypeWithId& type) {
+  if (type.logicalType_.has_value() && type.logicalType_->__isset.INTEGER) {
+    return !type.logicalType_->INTEGER.isSigned;
+  }
+  if (!type.convertedType_.has_value()) {
+    return false;
+  }
+  switch (type.convertedType_.value()) {
+    case thrift::ConvertedType::UINT_8:
+    case thrift::ConvertedType::UINT_16:
+    case thrift::ConvertedType::UINT_32:
+    case thrift::ConvertedType::UINT_64:
+      return true;
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
 std::unique_ptr<dwio::common::FormatData> ParquetParams::toFormatData(
     const std::shared_ptr<const dwio::common::TypeWithId>& type,
     const common::ScanSpec& scanSpec) {
@@ -243,10 +265,12 @@ bool ParquetData::rowGroupMatches(
   // Handle MapSubscriptFilter filters specially for Map types
   if (type->isMap()) {
     // Get key and value columns and types
-    auto keyColumn = type_->childAt(0)->column();
-    auto keyType = type_->childAt(0)->type();
-    auto valueColumn = type_->childAt(1)->column();
-    auto valueType = type_->childAt(1)->type();
+    const auto& keyType =
+        static_cast<const ParquetTypeWithId&>(*type_->childAt(0));
+    const auto& valueType =
+        static_cast<const ParquetTypeWithId&>(*type_->childAt(1));
+    auto keyColumn = keyType.column();
+    auto valueColumn = valueType.column();
 
     // Get the key column chunk
     const auto& keyColumnChunk = rowGroups_[rowGroupId].columns[keyColumn];
@@ -325,7 +349,8 @@ bool ParquetData::rowGroupMatches(
         std::move(blockBloomFilter),
         std::move(tokenBloomFilters),
         *type,
-        rowGroup.num_rows);
+        rowGroup.num_rows,
+        isUnsignedInteger(*type_));
 
     // Handle regular filter
     if (!testFilter(filter, columnStats.get(), rowGroup.num_rows, type)) {
@@ -484,7 +509,7 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
 bool ParquetData::checkColumnFilter(
     const thrift::ColumnChunk& columnChunk,
     common::Filter* filter,
-    const TypePtr& type,
+    const ParquetTypeWithId& type,
     size_t rowGroupId) {
   if (columnChunk.__isset.meta_data &&
       columnChunk.meta_data.__isset.statistics) {
@@ -498,11 +523,15 @@ bool ParquetData::checkColumnFilter(
         columnChunk.meta_data.statistics,
         nullptr, // No bloom filter for key
         std::move(emptyTokenFilters), // No token bloom filters for key
-        *type,
-        rowGroups_[rowGroupId].num_rows);
+        *type.type(),
+        rowGroups_[rowGroupId].num_rows,
+        isUnsignedInteger(type));
 
     return testFilter(
-        filter, columnStats.get(), rowGroups_[rowGroupId].num_rows, type);
+        filter,
+        columnStats.get(),
+        rowGroups_[rowGroupId].num_rows,
+        type.type());
   } else {
     // If no statistics available, conservatively pass through
     return true;

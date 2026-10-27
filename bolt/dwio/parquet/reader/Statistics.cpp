@@ -41,7 +41,8 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
         std::unique_ptr<struct NgramTokenExtractor>,
         std::unique_ptr<NGramBloomFilter>>> nGramStats,
     const bolt::Type& type,
-    uint64_t numRowsInRowGroup) {
+    uint64_t numRowsInRowGroup,
+    bool isUnsignedInteger) {
   std::optional<uint64_t> nullCount = columnChunkStats.__isset.null_count
       ? std::optional<uint64_t>(columnChunkStats.null_count)
       : std::nullopt;
@@ -51,6 +52,21 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
   std::optional<bool> hasNull = columnChunkStats.__isset.null_count
       ? std::optional<bool>(columnChunkStats.null_count > 0)
       : std::nullopt;
+
+  if (isUnsignedInteger) {
+    // Min and max of unsigned integer columns are ordered as unsigned values
+    // but would be read here as signed values of 'type'. Leave them out so
+    // that row groups are not pruned on misordered bounds.
+    return std::make_unique<dwio::common::IntegerColumnStatistics>(
+        valueCount,
+        hasNull,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::move(blockBloom));
+  }
 
   switch (type.kind()) {
     case TypeKind::BOOLEAN:
