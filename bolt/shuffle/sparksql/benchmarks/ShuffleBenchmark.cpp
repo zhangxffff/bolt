@@ -135,6 +135,11 @@ DEFINE_bool(
     true,
     "Cell writers store, without a codec call, the frames of a kind that "
     "last did not shrink, trying one in ten.");
+DEFINE_bool(
+    bolt_benchmark_shuffle_cell_verify_data_file,
+    true,
+    "Cell writers' verifyDataFile: walk the data file's headers once it is "
+    "written.");
 
 using namespace bytedance::bolt;
 using namespace bytedance::bolt::shuffle::sparksql;
@@ -1809,6 +1814,8 @@ writerOptions(const Case& c, Writer writer, const std::string& dataFile) {
       FLAGS_bolt_benchmark_shuffle_cell_stream_compression;
   options.cellOptions.adaptiveCompression =
       FLAGS_bolt_benchmark_shuffle_cell_adaptive_compression;
+  options.cellOptions.verifyDataFile =
+      FLAGS_bolt_benchmark_shuffle_cell_verify_data_file;
   return options;
 }
 
