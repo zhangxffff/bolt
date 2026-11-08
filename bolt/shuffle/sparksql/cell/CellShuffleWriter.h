@@ -45,7 +45,9 @@ namespace bytedance::bolt::shuffle::sparksql::cell {
 /// where a failed maybeReserve - or the optional spill threshold - spills
 /// the largest partitions until half the cell data is covered. A reclaim
 /// frees idle chunks first, then runs partial spills and compaction, and
-/// spills everything only when those fall short. Accounting is the
+/// spills everything only when those fall short; one of a given size writes
+/// no run while the cells hold less data than the run floor
+/// (CellShuffleOptions::reclaimRunFloorBytes). Accounting is the
 /// allocator's exact chunk/cell counters.
 ///
 /// On Celeborn a window can only be pushed whole, so every one of those
@@ -91,10 +93,12 @@ class CellShuffleWriter final : public CompositeShuffleWriter {
   /// What memory pressure made the writer do, counted per event - never per
   /// row - and logged once at stop.
   struct PressureStats {
-    /// Reclaims, and those answered with idle chunks alone, or deferred to
+    /// Reclaims, and those answered without a run: by idle chunks alone,
+    /// refused as the cells held less than the run floor, or deferred to
     /// the next batch boundary (remote, mid-batch).
     uint64_t reclaims{0};
     uint64_t idleReclaims{0};
+    uint64_t belowFloorReclaims{0};
     uint64_t deferredReclaims{0};
     uint64_t requestedBytes{0};
     uint64_t freedBytes{0};
@@ -165,6 +169,10 @@ class CellShuffleWriter final : public CompositeShuffleWriter {
   bool sealRequested_{false};
   bool sealing_{false};
   bool dictProbed_{false};
+  /// The run floor: a reclaim of a given size writes no run while the cells
+  /// hold less data than this. CellShuffleOptions::reclaimRunFloorBytes, at
+  /// most an eighth of the memory limit, set at the first batch; 0 is off.
+  int64_t reclaimRunFloorBytes_{0};
   PressureStats pressure_;
   /// Time the flat path spends decoding the columns of its batches and
   /// classifying their nulls, logged at stop. The nested path's is part of

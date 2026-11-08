@@ -61,6 +61,7 @@ The writer must be created through `BoltShuffleWriter::createShuffleWriter()`;
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `cellMemorySpillBytes` | `0` (off) | Chunk-memory spill threshold. Not a hard cap: past it a chunk growth spills (local) or requests a window push (Celeborn). |
+| `reclaimRunFloorBytes` | `64 MiB` | Local only: the cell data a writer must hold before a reclaim of a given size writes a run; below it, the reclaim frees only idle chunks. In effect the smaller of this and an eighth of the memory limit, this with none (see [Reclaim policy](#reclaim-policy-local)). `0` is off; a negative value is an error. |
 | `partitionSealBytes` | `40 MiB` | At a batch boundary, seal the payload of any partition whose bytes since it opened exceed this; other partitions stay open. |
 | `nullMemLimitBytes` | `16 MiB` | Seal the whole window once the moved null cells exceed this. A reclaim requests a seal above a quarter of it. |
 | `enableStringDictionary` | `true` | Probe the first batch to enable dictionary form per string column. |
@@ -236,16 +237,33 @@ is met:
    slack. This is safe even while the output reads cells.
 2. Skip the rest if idle memory covered the request or the writer holds
    fewer than two chunks.
-3. Spill the largest partitions until the request is covered, then shrink.
-4. Compact: move live cells out of the emptiest chunks and shrink again.
+3. Skip the rest too, for a reclaim of a given size, while the cells hold
+   less data than the run floor (below).
+4. Spill the largest partitions until the request is covered, then shrink.
+5. Compact: move live cells out of the emptiest chunks and shrink again.
    After a partial run, the remaining cells are spread over every chunk, so
    no chunk would be free without this step.
-5. Only then, spill every partition (a full run).
+6. Only then, spill every partition (a full run).
 
 It then releases the pool reservation and requests a window seal if the
 moved null cells exceed a quarter of `nullMemLimitBytes`. On Celeborn, a
-reclaim pushes the whole window instead of steps 3 to 5. All of this is
+reclaim pushes the whole window instead of steps 3 to 6. All of this is
 counted in the `CellShuffleWriter pressure` log line.
+
+**The run floor.** A run must carry real data. Memory arbitration may
+reclaim a squeezed writer a little at a time, after every batch; a run each
+time would write a few hundred bytes per partition, and the next batch
+would re-grow the tail cell of every chain the run emptied, so the writer's
+memory would go to nearly empty tail cells rather than data. A reclaim of a
+given size therefore writes no run while the cells hold less data than the
+run floor: `reclaimRunFloorBytes` (64 MiB by default), at most an eighth of
+the memory limit the cell size is taken from. It returns what step 1 freed,
+perhaps less than it asked, and the arbitrator turns to other operators for
+the rest. A reclaim that asks for everything (a size of 0 or less) and a
+chunk growth short of memory still write whatever the cells hold;
+`reclaimRunFloorBytes = 0` turns the floor off. The `CellShuffleWriter init`
+log line shows the floor in effect (`reclaimRunFloor`), and the pressure
+line counts the reclaims it turned away (`below floor`).
 
 ### Why null cells are not freed by spills
 

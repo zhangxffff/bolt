@@ -96,6 +96,17 @@ enum class ShuffleWriterType {
 struct CellShuffleOptions {
   // Chunk-memory spill threshold; 0 disables it. Not a hard memory cap.
   int64_t cellMemorySpillBytes = 0;
+  // Local shuffle: the cell data a writer must hold before a reclaim of a
+  // given size writes a run of it to disk. Below it, the reclaim frees only
+  // what needs no run - idle chunks - and the arbitrator looks to other
+  // operators for the rest: a squeezed writer holding little data,
+  // reclaimed after every batch, would otherwise write a run of a few bytes
+  // per partition each time. The floor in effect is the smaller of this and
+  // an eighth of the writer's memory limit - the tighter of the pool's cap
+  // and the task's execution memory - or this with neither. A reclaim of
+  // everything (a size of 0 or less) and a chunk growth short of memory
+  // write whatever the cells hold. 0: off. Must not be negative.
+  int64_t reclaimRunFloorBytes = 64LL << 20;
   // Seal a partition's payload at a batch boundary once it exceeds this
   // size; other partitions stay open.
   int64_t partitionSealBytes = 40LL << 20;
