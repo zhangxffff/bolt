@@ -239,7 +239,11 @@ is met:
    fewer than two chunks.
 3. Skip the rest too, for a reclaim of a given size, while the cells hold
    less data than the run floor (below).
-4. Spill the largest partitions until the request is covered, then shrink.
+4. Spill the largest partitions until the request is covered, and at least
+   two chunks (8 MiB), then shrink. Memory goes back to the pool only in
+   whole chunks: the cells a smaller run frees would lie scattered over
+   every chunk, too few for step 5 to empty one, and a reclaim of a few
+   hundred KB would end in step 6.
 5. Compact: move live cells out of the emptiest chunks and shrink again.
    After a partial run, the remaining cells are spread over every chunk, so
    no chunk would be free without this step.
