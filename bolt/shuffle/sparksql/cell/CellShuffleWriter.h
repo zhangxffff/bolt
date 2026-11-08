@@ -149,6 +149,10 @@ class CellShuffleWriter final : public CompositeShuffleWriter {
   /// its memory; returns the chunk bytes freed.
   int64_t releaseWindow(SealReason reason);
   void maybeSeal();
+  /// Logs the "CellShuffleWriter pressure" line at stop, whether the
+  /// output's finish succeeded or failed: pressure_ and the null
+  /// classification time.
+  void logPressure() const;
   /// Answers a reclaim by releasing the whole window (remote).
   arrow::Status reclaimWindow(int64_t size, int64_t* actual);
 

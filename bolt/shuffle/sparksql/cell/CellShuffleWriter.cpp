@@ -689,7 +689,14 @@ arrow::Status CellShuffleWriter::stopOrdinary() {
   BOLT_CHECK(!stopped_, "stop called twice");
   stopped_ = true;
   if (initialized_) {
-    splitter_->finish(metrics_);
+    try {
+      splitter_->finish(metrics_);
+    } catch (...) {
+      // A failed merge or data file verification needs the pressure line
+      // most: what memory pressure made the writer do.
+      logPressure();
+      throw;
+    }
   } else {
     // No ordinary batch ever came: the block output alone writes the data file
     // - empty, or the composite rows - or ends the Celeborn attempt.
@@ -705,8 +712,7 @@ arrow::Status CellShuffleWriter::stopOrdinary() {
       int64_t{0});
   metrics_.peakBytes = boltPool_->peakBytes();
   if (initialized_) {
-    LOG(INFO) << "CellShuffleWriter pressure: " << pressure_.toString()
-              << fmt::format(", nullClassify={:.1f}ms", nullClassifyNs_ / 1e6);
+    logPressure();
   }
 
   // The splitter has released its window; return idle chunks, the
@@ -719,6 +725,11 @@ arrow::Status CellShuffleWriter::stopOrdinary() {
   }
   boltPool_->release();
   return arrow::Status::OK();
+}
+
+void CellShuffleWriter::logPressure() const {
+  LOG(INFO) << "CellShuffleWriter pressure: " << pressure_.toString()
+            << fmt::format(", nullClassify={:.1f}ms", nullClassifyNs_ / 1e6);
 }
 
 std::string CellShuffleWriter::PressureStats::toString() const {
